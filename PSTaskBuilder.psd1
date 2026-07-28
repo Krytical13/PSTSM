@@ -1,6 +1,6 @@
 @{
     RootModule        = 'PSTaskBuilder.psm1'
-    ModuleVersion     = '0.1.0'
+    ModuleVersion     = '0.2.0'
     GUID              = 'c9e4a7f2-58b1-4d36-9a0e-7b2c15d8e034'
     Author            = 'PSTaskBuilder contributors'
     CompanyName       = ''
@@ -38,6 +38,11 @@
         'ConvertFrom-PSTaskDuration'
         'ConvertFrom-PSTaskResultCode'
         'ConvertFrom-PSTaskTriggerSummary'
+
+        # WinForms front end
+        'Show-PSTaskBuilder'
+        'Show-PSTaskEditor'
+        'Show-PSTaskTriggerDialog'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()
@@ -50,10 +55,15 @@
             # Must stay a single constant expression. String concatenation with '+' here makes
             # the manifest a "dynamic expression" that Import-PowerShellDataFile refuses to read.
             ReleaseNotes = @'
+0.2.0 - Adds the WinForms front end: task list with live filtering, the create/edit window
+with a parameter form generated from the script's own param() block, a live command preview,
+inline preflight, and round-trip editing of existing tasks. Start-PSTaskBuilder.ps1 handles
+the STA relaunch pwsh needs.
+
 0.1.0 - Engine only. AST-derived script profile (engine, parameters, elevation, help,
 interactivity/network signals), verified argument quoting, plan model with reliability
 defaults, preflight checks, transcript wrapper, register/inventory, and full round-trip
-editing of existing tasks. UI not yet built.
+editing of existing tasks.
 '@
         }
     }

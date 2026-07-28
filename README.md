@@ -3,8 +3,7 @@
 Build, validate, register and edit Windows scheduled tasks that run PowerShell scripts —
 with the launch boilerplate derived from the script instead of retyped every time.
 
-**Status: engine complete (v0.1.0). The WinForms UI is not built yet.** Every command below
-works today from the console and is what the UI will bind to.
+**Status: v0.2.0 — engine and UI both working.**
 
 ## Why
 
@@ -13,7 +12,33 @@ every task means retyping `-NoProfile -NonInteractive -ExecutionPolicy Bypass -F
 guessing at a logon type, and finding out at 3am which guess was wrong. This derives what can
 be derived, defaults the rest sensibly, and names the specific ways a task fails unattended.
 
-## Quick start
+## Run it
+
+```
+.\Start-PSTaskBuilder.ps1
+```
+
+That opens the task list. The launcher handles the STA relaunch that `pwsh` needs — WinForms
+requires an STA apartment and `pwsh` starts MTA, where a form either throws or deadlocks on its
+first dialog.
+
+**Main window** — every scheduled task, defaulting to the PowerShell ones and hiding the
+built-in `\Microsoft\` tree (both are toggles). Unlike the built-in console it shows the actual
+script each task runs, the engine, a readable schedule, and a *decoded* Last Run Result, so a
+broken task is visible without opening anything. New / Edit / Run now / Enable / Disable /
+Delete / Export.
+
+**Editor** — pick a `.ps1` and the form fills itself in. The parameter section is generated
+from the script's own `param()` block: switches become checkboxes, `ValidateSet` becomes a
+combo, path-like parameters get a Browse button, mandatory ones are marked and enforced.
+Declared defaults are pre-filled so the form and the preview always agree. The right pane shows
+the exact command that will be registered and the live preflight; saving is blocked while any
+`Error` check stands.
+
+Editing an existing task opens the same form via `ConvertFrom-PSTaskDefinition`, so a task
+created here reopens exactly as it was saved.
+
+## Scripted use
 
 ```powershell
 Import-Module .\PSTaskBuilder.psd1
@@ -107,7 +132,8 @@ generated per machine and per task, and there is no reason to track them.
 
 ## Verified behaviour
 
-Two things here were established by experiment, not assumption, and both are load-bearing:
+These were established by experiment, not assumption, and all of them are load-bearing.
+Do not "tidy" any of them without re-running the experiment.
 
 1. **Argument quoting.** Five candidate encoders were run against 11 hostile values (trailing
    backslash, embedded quotes, UNC, `&`, `;`, `$`, backtick, parens) on both Windows PowerShell
@@ -121,7 +147,23 @@ Two things here were established by experiment, not assumption, and both are loa
    binding fails. Confirmed broken on both engines. The wrapper deliberately has no `param()`
    block and uses the automatic `$args` with array splatting, which round-trips exactly.
 
-Do not "tidy" either of these without re-running the experiments.
+3. **`@($list)` throws on Windows PowerShell 5.1** when `$list` is a
+   `[System.Collections.Generic.List[object]]` — "Argument types do not match", regardless of
+   element type. Plain arrays are fine on both runtimes. Everything here returns `.ToArray()`
+   instead, and a lint test fails the build if `@(` ever wraps a List variable again.
+
+4. **Event handlers are plain scriptblocks and must stay that way.** `.GetNewClosure()` severs
+   module session-state affinity on 5.1: module functions become "not recognized" and
+   `$script:` variables read empty. A lint test enforces this.
+
+5. **A handler cannot assign to a caller's variable.** `$result = $x` inside a Click handler
+   creates `$result` in the *handler's* scope, so the caller still sees `$null`. State crosses
+   that boundary through a mutated hashtable. This shipped as a real bug — the trigger dialog
+   returned nothing — and is now covered by a test that drives the real handler.
+
+6. **`PerformClick()` is a no-op on a form that was never shown**, because it goes through
+   `CanSelect` and `Visible` reads the *effective* value. Test seams that click a button must
+   `Show()` the form first, or they silently prove nothing.
 
 ## Commands
 
@@ -136,6 +178,17 @@ Do not "tidy" either of these without re-running the experiments.
 `ConvertFrom-PSTaskCimTrigger`, `ConvertFrom-PSTaskDuration`, `ConvertFrom-PSTaskResultCode`,
 `ConvertFrom-PSTaskTriggerSummary`
 
+**UI** — `Show-PSTaskBuilder`, `Show-PSTaskEditor`, `Show-PSTaskTriggerDialog`
+
+The engine never references the UI, so it stays usable from a console, a build agent, or a
+scheduled task of its own.
+
+`Show-PSTaskEditor` is deliberately one long function rather than a set of smaller ones. Its
+event handlers are plain scriptblocks that read the defining function's locals — the only
+pattern that keeps module affinity on 5.1 (see #4 above) — and that only works while that
+function's frame is on the stack, which it is for the whole life of a modal `ShowDialog`.
+Splitting the handlers into separate functions would break them at runtime, not at parse time.
+
 ## Round-trip safety
 
 `ConvertFrom-PSTaskDefinition` sets `IsFullyRecognized = $false` and preserves the original
@@ -147,21 +200,39 @@ break production.
 ## Tests
 
 ```powershell
-Invoke-Pester -Path .\Tests\PSTaskBuilder.Tests.ps1
+Invoke-Pester -Path .\Tests\PSTaskBuilder.Tests.ps1      # engine, 86 tests
+Invoke-Pester -Path .\Tests\PSTaskBuilder.UI.Tests.ps1   # UI, 23 tests
 ```
 
-86 tests, offline apart from one that launches the engine to prove wrapper forwarding. Nothing
-in the suite registers a real scheduled task.
+Nothing in either suite registers a real scheduled task. The engine suite is offline apart from
+one test that launches PowerShell to prove wrapper argument forwarding. The UI suite lints for
+the 5.1 hazards above, builds every window headlessly and asserts control bounds, then shows
+and pumps them with a thread-exception trap — `DrawToBitmap` renders chrome only and misses
+show-time failures.
+
+**Run both under `powershell.exe` as well as `pwsh`.** 5.1 is where the binder bugs surface,
+and the UI form tests skip themselves under MTA:
+
+```powershell
+powershell.exe -STA -File <runner>   # or: pwsh -STA
+```
+
+A green MTA run means much less than it looks like; the suite prints which apartment it used.
 
 ## Requirements
 
-Windows PowerShell 5.1 or PowerShell 7+. The `ScheduledTasks` module (in-box) is needed only
-for `Get-PSTaskInventory`, `Register-PSTaskPlan` and `ConvertFrom-PSTaskDefinition`; the
-derivation and argument-building commands run anywhere. Registering a task generally requires
-elevation.
+Windows PowerShell 5.1 or PowerShell 7+, on Windows. The `ScheduledTasks` module (in-box) is
+needed only for `Get-PSTaskInventory`, `Register-PSTaskPlan` and `ConvertFrom-PSTaskDefinition`;
+the derivation and argument-building commands run anywhere. Registering a task generally
+requires elevation.
+
+Set `PSTASKBUILDER_NODIALOG=1` in any automated run. Without it, an exception inside a WinForms
+handler reaches the global handler and pops a modal message box on the desktop of whoever is at
+the machine.
 
 ## Next
 
-The WinForms front end: task list with `Get-PSTaskInventory`, the derived parameter form,
-live command preview, inline preflight, and an editor that opens any row via
-`ConvertFrom-PSTaskDefinition`.
+- Multi-machine apply: push an exported plan to a list of servers over WinRM.
+- Event triggers (`MSFT_TaskEventTrigger`) in the trigger dialog; they round-trip today but
+  cannot yet be created from the UI.
+- A history pane reading the Task Scheduler operational log for the selected task.
