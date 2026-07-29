@@ -23,6 +23,10 @@ function Test-PSTSMPlan {
     .PARAMETER SkipExistingTaskCheck
         Do not query Task Scheduler for a name collision. Used by tests and by offline
         plan validation.
+    .PARAMETER IsElevated
+        Whether the current session holds an administrator token. Defaults to the real answer;
+        it is a parameter so the elevation rules can be tested from either side without having
+        to run the suite twice under different tokens.
     .OUTPUTS
         [pscustomobject] Id, Severity, Title, Detail, Recommendation
     .EXAMPLE
@@ -35,7 +39,11 @@ function Test-PSTSMPlan {
 
         [object]$ScriptProfile,
 
-        [switch]$SkipExistingTaskCheck
+        [switch]$SkipExistingTaskCheck,
+
+        [bool]$IsElevated = (New-Object Security.Principal.WindowsPrincipal(
+                [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -238,6 +246,24 @@ function Test-PSTSMPlan {
         Add-PSTSMCheck 'PASSWORD_ROTATION' 'Info' 'Stored password will expire' `
             'The task stops running the next time this account rotates its password.' `
             'Prefer a gMSA where the domain supports it - it rotates itself and stores nothing.'
+    }
+
+    # --- can THIS session register what is being asked for? ------------------------------
+    # Microsoft's rule (Security Contexts for Tasks): from a low-privilege process you cannot
+    # register a task with RunLevel HIGHEST, nor as Local System, Builtin\Administrator or a
+    # group. Everything else - a task that runs as you at normal privilege - registers fine
+    # without elevation, which is why PSTSM does not demand a UAC prompt just to open.
+    if (-not $IsElevated) {
+        $needsAdmin = @()
+        if ($Plan.Principal.RunLevel -eq 'Highest') { $needsAdmin += 'it runs with highest privileges' }
+        if ($Plan.Principal.LogonType -eq 'ServiceAccount') { $needsAdmin += "it runs as $($Plan.Principal.UserId)" }
+        if ($Plan.Principal.LogonType -eq 'Group') { $needsAdmin += 'it runs for a group' }
+
+        if ($needsAdmin.Count -gt 0) {
+            Add-PSTSMCheck 'NEEDS_ELEVATION' 'Error' 'This task needs administrator rights to register' `
+                ("PSTSM is not running elevated, and $($needsAdmin -join ', and ').") `
+                'Restart PSTSM as administrator, or change the account so the task runs as you at normal privilege. Windows rejects the registration outright rather than silently downgrading it.'
+        }
     }
 
     if ($ScriptProfile.RequiresElevation -and $Plan.Principal.RunLevel -ne 'Highest') {

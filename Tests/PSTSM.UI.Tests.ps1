@@ -570,45 +570,47 @@ Describe 'Launcher' {
         $text | Should -Match '%\*'                    # forwards -NoElevate and friends
     }
 
-    It 'exposes NoElevate so the tool can be opened read-only' {
+    It 'makes elevation opt-in rather than required' {
+        # Task Scheduler itself opens without elevation, and a standard user can register a task
+        # that runs as themselves. Demanding UAC to open would lock out exactly the people
+        # managing their own work.
         $errs = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:Ps1, [ref]$null, [ref]$errs)
         $errs | Should -BeNullOrEmpty
         $names = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
-        $names | Should -Contain 'NoElevate'
+        $names | Should -Contain 'Elevated'
         $names | Should -Contain 'Relaunched'
+        $names | Should -Not -Contain 'NoElevate'   # the old, backwards default
     }
 
     It 'can never relaunch itself twice' {
         # -Relaunched is the loop guard. If any combination still relaunched while it was set,
         # a cancelled UAC prompt would spawn processes forever.
         $decide = {
-            param($elevated, $sta, $noElevate, $relaunched)
+            param($elevated, $sta, $wantElevated, $relaunched)
             $needsSta = -not $sta
-            $needsElev = (-not $elevated) -and (-not $noElevate)
+            $needsElev = $wantElevated -and (-not $elevated)
             (($needsSta -or $needsElev) -and -not $relaunched)
         }
         foreach ($e in $true, $false) {
             foreach ($s in $true, $false) {
-                foreach ($n in $true, $false) {
-                    (& $decide $e $s $n $true) | Should -BeFalse -Because 'once relaunched it must run, not relaunch again'
+                foreach ($w in $true, $false) {
+                    (& $decide $e $s $w $true) | Should -BeFalse -Because 'once relaunched it must run, not relaunch again'
                 }
             }
         }
     }
 
-    It 'never asks for elevation when -NoElevate was given' {
-        # Apartment state is irrelevant here: -NoElevate must suppress the UAC prompt whatever
-        # else is true, so the decision takes only the two inputs that matter.
+    It 'never prompts for elevation unless it was asked for' {
         $needsElevation = {
-            param($elevated, $noElevate)
-            (-not $elevated) -and (-not $noElevate)
+            param($elevated, $wantElevated)
+            $wantElevated -and (-not $elevated)
         }
-        foreach ($e in $true, $false) {
-            (& $needsElevation $e $true) | Should -BeFalse
-        }
-        # ...and still asks when it was not given and the token is not elevated.
-        (& $needsElevation $false $false) | Should -BeTrue
+        # Default launch: no prompt, whatever the current token is.
+        foreach ($e in $true, $false) { (& $needsElevation $e $false) | Should -BeFalse }
+        # -Elevated on an unelevated token: prompt. Already elevated: no need.
+        (& $needsElevation $false $true) | Should -BeTrue
+        (& $needsElevation $true $true) | Should -BeFalse
     }
 }
 

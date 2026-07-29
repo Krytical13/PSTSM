@@ -16,29 +16,42 @@ be derived, defaults the rest sensibly, and names the specific ways a task fails
 
 ## Run it
 
-**Double-click `PSTSM.cmd`.**
+**Double-click `PSTSM.cmd`.** No UAC prompt.
 
 That's the entry point because Windows opens a `.ps1` in an editor rather than running it. It
-hands off to `Start-PSTSM.ps1`, which sorts out the two things that have to be true before the
-window can open — in a single relaunch, not two:
+hands off to `Start-PSTSM.ps1`, which sorts out the STA apartment WinForms requires — `pwsh`
+starts MTA, where a form either throws or deadlocks on its first dialog.
 
-- **Elevation.** Registering, editing or deleting a task needs an administrator token, as do
-  `Install-ADServiceAccount` and the batch-logon right. You'll get one UAC prompt.
-- **STA apartment.** WinForms requires it. `powershell.exe` defaults to STA; `pwsh` starts MTA,
-  where a form either throws or deadlocks on its first dialog.
+### Elevation is a property of the task, not of opening the tool
 
-Elevating keeps you as **you**, with an administrator token. If your own account isn't an
-administrator, UAC asks for one that is and Windows then runs the tool as *that* account —
-which changes whose tasks you see and who new ones are attributed to. That's Windows' behaviour,
-not a choice this tool makes, but it explains a list that suddenly looks different.
+PSTSM starts unelevated, like Task Scheduler itself. A standard user can already register a task
+that runs as themselves, and demanding a UAC prompt up front would lock out exactly the people
+managing their own work.
 
-Just want a look? Nothing is blocked read-only:
+Microsoft's [Security Contexts for Tasks](https://learn.microsoft.com/windows/win32/taskschd/security-contexts-for-running-tasks#user-account-control-uac-security-for-tasks)
+draws the line precisely:
 
-```
-PSTSM.cmd -NoElevate          .\Start-PSTSM.ps1 -NoElevate
-```
+| | Needs admin? |
+|---|---|
+| Register / edit / delete a task that runs as **you** at normal privilege | no |
+| Browse, edit, health sweep, run logs — everything read-only | no |
+| **Run with highest privileges** | **yes** |
+| Run as **SYSTEM / LOCAL SERVICE / NETWORK SERVICE** | **yes** |
+| Run for a **group** | **yes** |
+| `Install-ADServiceAccount`, granting the batch-logon right | **yes** |
 
-The list, editor, health sweep and run logs all work; only saving needs the rights.
+Windows *rejects* those registrations outright rather than silently downgrading them, so the
+preflight raises `NEEDS_ELEVATION` as a blocking error the moment a plan asks for one without
+the rights — and the main window grows a **Restart as admin** button. You escalate when the work
+needs it, not before.
+
+`PSTSM.cmd -Elevated` asks up front if you'd rather.
+
+One thing worth knowing when you do elevate: it keeps you as **you** with an administrator token,
+but if your own account isn't an administrator, UAC asks for one that is and Windows then runs
+the tool as *that* account — which changes whose tasks you see and who new ones are attributed
+to. That's Windows' behaviour, not a choice this tool makes, but it explains a list that suddenly
+looks different.
 
 **Main window** — every scheduled task, defaulting to the PowerShell ones and hiding the
 built-in `\Microsoft\` tree (both are toggles). Unlike the built-in console it shows the actual

@@ -76,14 +76,25 @@ function Show-PSTSM {
     $btnConsole = New-PSTSMUIButton -Text 'Task Scheduler' -Width 130
     $btnRefresh = New-PSTSMUIButton -Text 'Refresh'
 
+    # Elevation is a property of what a task DOES, not of opening this window, so the tool runs
+    # unelevated like Task Scheduler does. This offers the upgrade only when it is not already
+    # held - most work never needs it.
+    $isElevated = (New-Object Security.Principal.WindowsPrincipal(
+            [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    $btnElevate = New-PSTSMUIButton -Text 'Restart as admin' -Width 140
+
     $toolbar = New-Object System.Windows.Forms.FlowLayoutPanel
     $toolbar.Dock = 'Top'
     $toolbar.AutoSize = $true
     $toolbar.WrapContents = $true
     $toolbar.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
-    foreach ($b in @($btnNew, $btnEdit, $btnRun, $btnLog, $btnHealth, $btnToggle, $btnDelete, $btnExport, $btnConsole, $btnRefresh)) {
-        [void]$toolbar.Controls.Add($b)
-    }
+    $toolbarButtons = @($btnNew, $btnEdit, $btnRun, $btnLog, $btnHealth, $btnToggle, $btnDelete, $btnExport, $btnConsole, $btnRefresh)
+    # Omitted entirely rather than added-then-hidden. A hidden control is still measured by the
+    # layout, and Control.Visible reads false for everything on a form that has never been
+    # shown - so "hidden" is not something the offline layout checks can even see.
+    if (-not $isElevated) { $toolbarButtons += $btnElevate }
+    foreach ($b in $toolbarButtons) { [void]$toolbar.Controls.Add($b) }
 
     # --- filter row ------------------------------------------------------------------
     $filterRow = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -411,6 +422,25 @@ function Show-PSTSM {
                     [System.Windows.Forms.MessageBox]::Show("Could not open $open : $($_.Exception.Message)", 'PSTSM',
                         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
                 }
+            }
+        })
+
+    $btnElevate.add_Click({
+            $launcher = Join-Path (Split-Path $PSScriptRoot -Parent) 'Start-PSTSM.ps1'
+            if (-not (Test-Path -LiteralPath $launcher)) {
+                [System.Windows.Forms.MessageBox]::Show("Could not find $launcher", 'PSTSM',
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+            try {
+                $hostExe = (Get-Process -Id $PID).Path
+                Start-Process -FilePath $hostExe -Verb RunAs -ErrorAction Stop `
+                    -ArgumentList ('-STA -NoProfile -ExecutionPolicy Bypass -File "{0}" -Relaunched' -f $launcher)
+                $form.Close()     # the elevated copy takes over
+            }
+            catch {
+                # Almost always a dismissed UAC prompt. Not an error worth a stack trace.
+                Write-Verbose "Elevation declined: $($_.Exception.Message)"
             }
         })
 

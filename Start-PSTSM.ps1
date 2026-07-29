@@ -5,41 +5,48 @@
 .DESCRIPTION
     The entry point. Double-clicking PSTSM.cmd runs this; it can also be called directly.
 
-    Two things have to be true before the window can open, and this sorts out both in a SINGLE
-    relaunch rather than bouncing the process twice:
+    Starts UNELEVATED, the same as Task Scheduler itself. A standard user can already register
+    a task that runs as themselves, so demanding a UAC prompt up front would lock out exactly
+    the people managing their own work, and would be heavier-handed than the tool it replaces.
 
-      STA apartment - WinForms requires it. powershell.exe has defaulted to STA since v3, but
-      pwsh starts MTA, where showing a form either throws or produces a window that deadlocks
-      on its first dialog.
+    Microsoft's rule (Security Contexts for Tasks) is precise about where the line is. From a
+    low-privilege process you cannot register a task with RunLevel HIGHEST, nor as Local System,
+    Builtin\Administrator or a group. Everything else - registering, editing and deleting a task
+    that runs as you at normal privilege - works without elevation, as does the whole read-only
+    side: the list, the editor, the health sweep, run logs.
 
-      Elevation - registering, editing or deleting a scheduled task outside your own folder
-      needs an administrator token, and Install-ADServiceAccount and the batch-logon right
-      need one too. Without it the list still loads and everything is readable, so -NoElevate
-      is there for a look around.
+    So elevation is treated as a property of what you are trying to DO, not of opening the tool.
+    The preflight raises it as a blocking error the moment a plan needs rights this session does
+    not have, and the main window offers to restart elevated at that point. Use -Elevated to ask
+    for it up front instead.
 
-    Elevating keeps you as YOU, with an administrator token. If your own account is not an
-    administrator, UAC will ask for one that is, and Windows then runs the tool as THAT
-    account - which changes whose tasks you see and who new tasks are attributed to. That is a
-    Windows behaviour, not a choice this script makes, but it is worth knowing before you
-    wonder why the list looks different.
+    The apartment still has to be sorted before a window can open: WinForms requires STA, and
+    while powershell.exe has defaulted to STA since v3, pwsh starts MTA, where showing a form
+    either throws or deadlocks on the first dialog. That and any requested elevation are handled
+    in a SINGLE relaunch rather than bouncing the process twice.
+
+    One thing worth knowing when you do elevate: it keeps you as YOU with an administrator
+    token, but if your own account is not an administrator, UAC asks for one that is and Windows
+    then runs the tool as THAT account - which changes whose tasks you see and who new ones are
+    attributed to. That is Windows' behaviour, not a choice this script makes.
 .PARAMETER ScriptPath
     Skip the task list and open the editor directly for this script.
-.PARAMETER NoElevate
-    Do not ask for elevation. The list, the editor and the health sweep all work read-only;
-    saving a task will fail if the account lacks the rights.
+.PARAMETER Elevated
+    Ask for administrator rights up front. Only needed for tasks that run as SYSTEM, as a group,
+    or with highest privileges - and for the gMSA helpers.
 .PARAMETER Relaunched
     Internal. Set on the relaunch so it cannot loop.
 .EXAMPLE
     .\Start-PSTSM.ps1
 .EXAMPLE
-    .\Start-PSTSM.ps1 -NoElevate
+    .\Start-PSTSM.ps1 -Elevated
 .EXAMPLE
     .\Start-PSTSM.ps1 -ScriptPath 'D:\Scripts\Send-Report.ps1'
 #>
 [CmdletBinding()]
 param(
     [string]$ScriptPath,
-    [switch]$NoElevate,
+    [switch]$Elevated,
     [switch]$Relaunched
 )
 
@@ -51,7 +58,8 @@ $isElevated = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRo
 $isSta = ([System.Threading.Thread]::CurrentThread.GetApartmentState() -eq 'STA')
 
 $needsSta = -not $isSta
-$needsElevation = (-not $isElevated) -and (-not $NoElevate)
+# Only when explicitly asked for. Opening the tool is not itself a privileged operation.
+$needsElevation = $Elevated -and (-not $isElevated)
 
 if (($needsSta -or $needsElevation) -and -not $Relaunched -and -not $env:PSTSM_NOLAUNCH) {
     $self = $PSCommandPath
@@ -64,7 +72,7 @@ if (($needsSta -or $needsElevation) -and -not $Relaunched -and -not $env:PSTSM_N
     # inconsistently, and both of these paths can contain spaces.
     $argString = '-STA -NoProfile -ExecutionPolicy Bypass -File "{0}" -Relaunched' -f $self
     if ($ScriptPath) { $argString += ' -ScriptPath "{0}"' -f $ScriptPath }
-    if ($NoElevate) { $argString += ' -NoElevate' }
+    if ($Elevated) { $argString += ' -Elevated' }
 
     $startParams = @{
         FilePath     = $hostExe
@@ -77,18 +85,14 @@ if (($needsSta -or $needsElevation) -and -not $Relaunched -and -not $env:PSTSM_N
         Start-Process @startParams
     }
     catch {
-        # The usual cause is the UAC prompt being dismissed. Say so plainly and offer the way
-        # to carry on without it, rather than surfacing a raw Win32 exception.
+        # The usual cause is the UAC prompt being dismissed. Say so plainly, and point out that
+        # most work does not need elevation at all, rather than surfacing a raw Win32 exception.
         Write-Warning ("PSTSM could not start elevated: $($_.Exception.Message)" + [Environment]::NewLine +
-            'If you cancelled the prompt, run it again and accept, or start it read-only with:' + [Environment]::NewLine +
-            "    .\Start-PSTSM.ps1 -NoElevate")
+            'If you cancelled the prompt, run it again and accept - or just run it normally:' + [Environment]::NewLine +
+            '    .\Start-PSTSM.ps1' + [Environment]::NewLine +
+            'Only tasks that run as SYSTEM, as a group, or with highest privileges need administrator rights.')
     }
     return
-}
-
-if ($needsElevation) {
-    # Reached only when -Relaunched is set and elevation still did not happen.
-    Write-Warning 'Running without administrator rights. Tasks can be viewed but saving one will fail.'
 }
 
 if ($needsSta) {

@@ -577,6 +577,37 @@ exit 0
         @($r | Where-Object Id -eq 'GMSA_NAME') | Should -HaveCount 0
     }
 
+    It 'blocks a task that needs administrator rights when the session has none' {
+        # Microsoft's rule (Security Contexts for Tasks): from a low-privilege process you
+        # cannot register RunLevel HIGHEST, Local System, Builtin\Administrator or a group.
+        # Windows rejects it outright rather than silently downgrading, so this is an Error.
+        $system = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM'
+        $r = Test-PSTSMPlan -Plan $system -SkipExistingTaskCheck -IsElevated $false
+        ($r | Where-Object Id -eq 'NEEDS_ELEVATION').Severity | Should -Be 'Error' -Because 'it runs as SYSTEM'
+
+        $highest = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'
+        $r = Test-PSTSMPlan -Plan $highest -SkipExistingTaskCheck -IsElevated $false
+        ($r | Where-Object Id -eq 'NEEDS_ELEVATION').Severity | Should -Be 'Error' -Because 'it runs with highest privileges'
+
+        $group = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Group' -UserId 'CONTOSO\Operators'
+        $r = Test-PSTSMPlan -Plan $group -SkipExistingTaskCheck -IsElevated $false
+        ($r | Where-Object Id -eq 'NEEDS_ELEVATION').Severity | Should -Be 'Error' -Because 'it runs for a group'
+    }
+
+    It 'does not mention elevation for a task that runs as you at normal privilege' {
+        # This is the case that must keep working unelevated, and the reason the tool no longer
+        # demands a UAC prompt just to open: a standard user managing their own scheduled work.
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Interactive' -RunLevel 'Limited'
+        $r = Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck -IsElevated $false
+        @($r | Where-Object Id -eq 'NEEDS_ELEVATION') | Should -HaveCount 0
+    }
+
+    It 'does not mention elevation when the session already has it' {
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM'
+        $r = Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck -IsElevated $true
+        @($r | Where-Object Id -eq 'NEEDS_ELEVATION') | Should -HaveCount 0
+    }
+
     It 'reports a missing script as a hard error and stops' {
         $plan = New-PSTSMPlan -ScriptPath $script:QuietScript
         $plan.ScriptPath = Join-Path $TestDrive 'gone.ps1'
