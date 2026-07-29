@@ -198,6 +198,11 @@ function Get-PSTaskScriptProfile {
             # Kept as source text, not evaluated - a default of (Get-Date) must not run here.
             $defaultText = if ($p.DefaultValue) { $p.DefaultValue.Extent.Text } else { $null }
 
+            # Work out what the expression WOULD produce, still without running it, so an
+            # expression default can be shown to the operator instead of an empty box. Only
+            # a provably side-effect-free shape resolves; see Resolve-PSTaskDefaultValue.
+            $resolvedDefault = Resolve-PSTaskDefaultValue -Expression $defaultText -ScriptPath $resolved
+
             # UI hints. Path-like parameters get a Browse button; credentials get blocked with
             # an explanation rather than a text box that would store a password in task XML.
             $isPathLike = ($typeName -eq 'String' -or $typeName -eq 'String[]') -and
@@ -219,6 +224,12 @@ function Get-PSTaskScriptProfile {
                     IsMandatory   = $isMandatory
                     DefaultValue  = $defaultText
                     HasDefault    = [bool]$defaultText
+                    # Literal   - a plain value; safe to pre-fill the control with.
+                    # Resolved  - an expression whose result is known; SHOWN as a cue, never
+                    #             passed, so the script still computes it at run time.
+                    # Unresolved- shown as source text only.
+                    DefaultKind   = $resolvedDefault.Kind
+                    ResolvedDefault = $resolvedDefault
                     ValidateSet   = $validateSet
                     ValidateRange = $validateRange
                     Aliases       = $aliases
@@ -313,7 +324,8 @@ function Get-PSTaskScriptProfile {
     }
     catch { Write-Verbose "Could not read file bytes for the encoding check: $($_.Exception.Message)" }
 
-    [PSCustomObject]@{
+    # NOT $profile - that is an automatic variable.
+    $scriptProfile = [PSCustomObject]@{
         PSTypeName        = 'PSTaskBuilder.ScriptProfile'
 
         Path              = $resolved
@@ -358,4 +370,13 @@ function Get-PSTaskScriptProfile {
         ParseErrors       = $errorMessages
         IsParseable       = ($errorMessages.Count -eq 0)
     }
+
+    # A settings file next to the script is a hard dependency of the task that Task Scheduler
+    # will never mention. Added after the fact because the detector reads the parameter list.
+    $configFiles = @()
+    try { $configFiles = @(Get-PSTaskScriptConfigFile -ScriptProfile $scriptProfile) }
+    catch { Write-Verbose "Config-file detection failed: $($_.Exception.Message)" }
+    $scriptProfile | Add-Member -MemberType NoteProperty -Name 'ConfigFiles' -Value $configFiles
+
+    $scriptProfile
 }

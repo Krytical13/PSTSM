@@ -152,6 +152,60 @@ Describe 'Get-PSTaskScriptProfile' {
     }
 }
 
+Describe 'Resolve-PSTaskDefaultValue' {
+    BeforeAll { $script:FakeScript = Join-Path $TestDrive 'Sub\Runner.ps1' }
+
+    It 'reports plain values as literals' {
+        (Resolve-PSTaskDefaultValue -Expression "'Normal'").Kind | Should -Be 'Literal'
+        (Resolve-PSTaskDefaultValue -Expression "'Normal'").Value | Should -Be 'Normal'
+        (Resolve-PSTaskDefaultValue -Expression '14').Value | Should -Be 14
+    }
+
+    It 'resolves $PSScriptRoot against the script it came from' {
+        $r = Resolve-PSTaskDefaultValue -Expression '(Join-Path $PSScriptRoot ''settings.psd1'')' -ScriptPath $script:FakeScript
+        $r.Kind | Should -Be 'Resolved'
+        $r.Value | Should -Be (Join-Path (Split-Path $script:FakeScript -Parent) 'settings.psd1')
+    }
+
+    It 'resolves environment variables' {
+        $r = Resolve-PSTaskDefaultValue -Expression '(Join-Path $env:ProgramData ''Acme\Logs'')'
+        $r.Kind | Should -Be 'Resolved'
+        $r.Value | Should -Be (Join-Path $env:ProgramData 'Acme\Logs')
+    }
+
+    It 'resolves an interpolated string of safe parts' {
+        $r = Resolve-PSTaskDefaultValue -Expression '"$env:ProgramData\Acme"'
+        $r.Kind | Should -Be 'Resolved'
+        $r.Value | Should -Be "$env:ProgramData\Acme"
+    }
+
+    It 'refuses to evaluate anything that could have a side effect' {
+        # The whole safety argument: this tool is pointed at scripts the operator may not have
+        # written, so opening one must never be a way to run it.
+        foreach ($e in @(
+                '(Get-Content C:\secrets\key.txt)',
+                '(Invoke-RestMethod https://example.invalid)',
+                '(Get-Date)',
+                '(Remove-Item C:\temp -Recurse)',
+                '(& $someCommand)',
+                '([System.IO.File]::ReadAllText(''C:\x''))'
+            )) {
+            (Resolve-PSTaskDefaultValue -Expression $e).Kind | Should -Be 'Unresolved'
+            (Resolve-PSTaskDefaultValue -Expression $e).Value | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'keeps the source text when it cannot resolve, so it can still be shown' {
+        $r = Resolve-PSTaskDefaultValue -Expression '(Get-Date).AddDays(-7)'
+        $r.Kind | Should -Be 'Unresolved'
+        $r.Text | Should -Be '(Get-Date).AddDays(-7)'
+    }
+
+    It 'does not resolve an unset environment variable to an empty path' {
+        (Resolve-PSTaskDefaultValue -Expression '$env:PSTASKBUILDER_NOT_SET_ANYWHERE').Kind | Should -Be 'Unresolved'
+    }
+}
+
 Describe 'ConvertTo-PSTaskQuotedValue' {
     It 'leaves a simple token bare so the preview stays readable' {
         ConvertTo-PSTaskQuotedValue -Value 'simple' | Should -Be 'simple'
@@ -528,6 +582,101 @@ exit 0
         $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
         $r | Should -HaveCount 1
         $r[0].Id | Should -Be 'SCRIPT_MISSING'
+    }
+}
+
+Describe 'Settings-file detection' {
+    BeforeAll {
+        $script:CfgDir = Join-Path $TestDrive 'WithConfig'
+        New-Item -ItemType Directory -Path $script:CfgDir -Force | Out-Null
+
+        $script:CfgScript = Join-Path $script:CfgDir 'Run-Reports.ps1'
+        @'
+param(
+    [string]$ConfigPath = (Join-Path $PSScriptRoot 'settings.psd1'),
+    [string]$LogDirectory = (Join-Path $env:ProgramData 'Acme\Logs'),
+    [string]$OutputPath = 'C:\Out'
+)
+$cfg = Import-PowerShellDataFile -Path $ConfigPath
+exit 0
+'@ | Set-Content -LiteralPath $script:CfgScript -Encoding UTF8
+
+        $script:CfgFile = Join-Path $script:CfgDir 'settings.psd1'
+        "@{ Recipients = @('a@x'); Threshold = 14 }" | Set-Content -LiteralPath $script:CfgFile -Encoding UTF8
+    }
+
+    It 'resolves an expression default without executing anything' {
+        $p = Get-PSTaskScriptProfile -Path $script:CfgScript
+        $cfgParam = $p.Parameters | Where-Object Name -eq 'ConfigPath'
+        $cfgParam.DefaultKind | Should -Be 'Resolved'
+        $cfgParam.ResolvedDefault.Value | Should -Be $script:CfgFile
+
+        $logParam = $p.Parameters | Where-Object Name -eq 'LogDirectory'
+        $logParam.DefaultKind | Should -Be 'Resolved'
+        $logParam.ResolvedDefault.Value | Should -Be (Join-Path $env:ProgramData 'Acme\Logs')
+    }
+
+    It 'finds the settings file and reads its keys' {
+        $p = Get-PSTaskScriptProfile -Path $script:CfgScript
+        @($p.ConfigFiles).Count | Should -Be 1
+        $p.ConfigFiles[0].ParameterName | Should -Be 'ConfigPath'
+        $p.ConfigFiles[0].Exists | Should -BeTrue
+        $p.ConfigFiles[0].Parses | Should -BeTrue
+        $p.ConfigFiles[0].Keys | Should -Contain 'Recipients'
+    }
+
+    It 'does not mistake an ordinary output path for configuration' {
+        $p = Get-PSTaskScriptProfile -Path $script:CfgScript
+        @($p.ConfigFiles | Where-Object ParameterName -eq 'OutputPath') | Should -HaveCount 0
+    }
+
+    It 'raises no error when the settings file is present and parses' {
+        # $TestDrive lives under C:\Users\<you>\AppData\Local\Temp, so the correct verdict here
+        # is the in-profile WARNING, not a clean OK - a task running as SYSTEM really could not
+        # read this path. Asserting CONFIG_OK would have been asserting a bug.
+        $r = Test-PSTaskPlan -Plan (New-PSTaskPlan -ScriptPath $script:CfgScript) -SkipExistingTaskCheck
+        @($r | Where-Object Id -in 'CONFIG_MISSING', 'CONFIG_UNPARSEABLE') | Should -HaveCount 0
+
+        $verdict = @($r | Where-Object Id -in 'CONFIG_OK', 'CONFIG_IN_PROFILE')
+        $verdict | Should -HaveCount 1
+        $verdict[0].Detail | Should -BeLike "*$($script:CfgFile)*"
+    }
+
+    It 'warns that a settings file in a user profile is unreadable by the task account' {
+        $r = Test-PSTaskPlan -Plan (New-PSTaskPlan -ScriptPath $script:CfgScript) -SkipExistingTaskCheck
+        ($r | Where-Object Id -eq 'CONFIG_IN_PROFILE').Severity | Should -Be 'Warning'
+    }
+
+    It 'lists the settings keys so the file can be recognised' {
+        $p = Get-PSTaskScriptProfile -Path $script:CfgScript
+        $p.ConfigFiles[0].Keys | Should -Contain 'Recipients'
+    }
+
+    It 'blocks when the settings file is missing' {
+        Remove-Item -LiteralPath $script:CfgFile -Force
+        try {
+            $r = Test-PSTaskPlan -Plan (New-PSTaskPlan -ScriptPath $script:CfgScript) -SkipExistingTaskCheck
+            ($r | Where-Object Id -eq 'CONFIG_MISSING').Severity | Should -Be 'Error'
+        }
+        finally { "@{ Recipients = @('a@x') }" | Set-Content -LiteralPath $script:CfgFile -Encoding UTF8 }
+    }
+
+    It 'blocks when the settings file does not parse' {
+        Set-Content -LiteralPath $script:CfgFile -Value 'this is not @{ valid' -Encoding UTF8
+        try {
+            $r = Test-PSTaskPlan -Plan (New-PSTaskPlan -ScriptPath $script:CfgScript) -SkipExistingTaskCheck
+            ($r | Where-Object Id -eq 'CONFIG_UNPARSEABLE').Severity | Should -Be 'Error'
+        }
+        finally { "@{ Recipients = @('a@x') }" | Set-Content -LiteralPath $script:CfgFile -Encoding UTF8 }
+    }
+
+    It 'never puts a resolved expression default on the command line' {
+        # It is shown in the form as a cue, not passed - the script must evaluate it itself.
+        $plan = New-PSTaskPlan -ScriptPath $script:CfgScript
+        $plan.Parameters.Contains('ConfigPath') | Should -BeFalse
+        $plan.Parameters.Contains('LogDirectory') | Should -BeFalse
+        $plan.Parameters['OutputPath'] | Should -Be 'C:\Out'      # literal, so it IS seeded
+        $plan.ArgumentString | Should -Not -BeLike '*-ConfigPath*'
     }
 }
 

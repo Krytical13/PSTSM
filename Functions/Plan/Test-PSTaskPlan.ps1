@@ -298,6 +298,55 @@ function Test-PSTaskPlan {
             'The share must be readable by the task account at run time - and S4U cannot authenticate to it at all. Prefer a local copy.'
     }
 
+    # --- config files -------------------------------------------------------------------
+    # A settings file next to the script is a hard dependency of the task, and it fails in
+    # exactly the same ways the script does. Task Scheduler will never mention it.
+    foreach ($cfg in @($ScriptProfile.ConfigFiles)) {
+        # An explicitly supplied path wins over the script's default.
+        $effectivePath = $cfg.Path
+        $overridden = $false
+        if ($Plan.Parameters -and $Plan.Parameters.Contains($cfg.ParameterName)) {
+            $supplied = [string]$Plan.Parameters[$cfg.ParameterName]
+            if ($supplied) { $effectivePath = $supplied; $overridden = $true }
+        }
+
+        $source = if ($overridden) { "supplied via -$($cfg.ParameterName)" } else { "the script's default for -$($cfg.ParameterName)" }
+
+        if (-not (Test-Path -LiteralPath $effectivePath -PathType Leaf)) {
+            Add-PSTaskCheck 'CONFIG_MISSING' 'Error' 'Settings file does not exist' `
+                "$effectivePath ($source)." `
+                'The script reads its configuration from here, so the task fails on the first run. Create it, or point the parameter somewhere else.'
+            continue
+        }
+
+        if ($cfg.Parses -eq $false -and -not $overridden) {
+            Add-PSTaskCheck 'CONFIG_UNPARSEABLE' 'Error' 'Settings file does not parse' `
+                "$effectivePath - $($cfg.ParseError)" `
+                'The script will throw as soon as it reads this. Fix the file before scheduling.'
+            continue
+        }
+
+        if ($effectivePath -like "$env:USERPROFILE*") {
+            Add-PSTaskCheck 'CONFIG_IN_PROFILE' 'Warning' 'Settings file is in your user profile' `
+                "$effectivePath ($source)." `
+                "The task account is not you. SYSTEM and service accounts cannot reliably read another user's profile - move it somewhere machine-wide."
+        }
+        elseif ($effectivePath -match '^\\\\') {
+            Add-PSTaskCheck 'CONFIG_ON_UNC' 'Warning' 'Settings file is on a network share' `
+                "$effectivePath ($source)." `
+                'The task account must be able to read the share at run time - and an S4U logon cannot authenticate to it at all.'
+        }
+        else {
+            $detail = "$effectivePath"
+            if ($cfg.Keys -and $cfg.Keys.Count -gt 0) {
+                $shown = @($cfg.Keys | Select-Object -First 8) -join ', '
+                if ($cfg.Keys.Count -gt 8) { $shown += ", ... ($($cfg.Keys.Count) settings)" }
+                $detail += " - $shown"
+            }
+            Add-PSTaskCheck 'CONFIG_OK' 'Ok' "Settings file found for -$($cfg.ParameterName)" $detail $null
+        }
+    }
+
     # --- triggers ----------------------------------------------------------------------
     if (-not $Plan.Triggers -or @($Plan.Triggers).Count -eq 0) {
         Add-PSTaskCheck 'NO_TRIGGERS' 'Warning' 'Task has no triggers' `

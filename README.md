@@ -90,6 +90,45 @@ One `Parser::ParseFile` call — the script is never executed.
 refuse rather than put a secret on a command line) and the behavioural signals the preflight
 consumes.
 
+### Defaults, and why some are shown but not filled in
+
+Parameter defaults come in three kinds, and they are treated differently on purpose:
+
+| Kind | Example | In the form |
+|---|---|---|
+| **Literal** | `= 14`, `= 'Normal'` | pre-filled as a real value |
+| **Resolved** | `= (Join-Path $env:ProgramData 'Acme\Logs')` | shown greyed, as a hint |
+| **Unresolved** | `= (Get-Date).AddDays(-7)` | source text shown as a hint |
+
+**Nothing is ever executed to work this out.** This tool gets pointed at scripts you did not
+write, so opening one must never be a way to run it — a default could as easily be
+`(Get-Content C:\secrets\key.txt)`. `Resolve-PSTaskDefaultValue` walks the AST and computes a
+value only for a provably side-effect-free shape: literals, `$PSScriptRoot`, `$env:*`,
+`Join-Path`, `+` concatenation, and interpolated strings made only of those. Everything else
+stays unresolved and is displayed as text.
+
+A **Resolved** default is deliberately *not* put on the command line either. The script computes
+the same thing at run time, and passing it would freeze anything time-dependent and put a value
+on the command line the operator never chose. Leaving the box empty means "let the script decide"
+— the hint just makes that visible rather than looking like the form knows nothing.
+
+### Settings files
+
+Scripts built for unattended use often keep their real configuration next door:
+
+```powershell
+[string]$ConfigPath = (Join-Path $PSScriptRoot 'settings.psd1')
+```
+
+That file is a hard dependency of the task that Task Scheduler will never mention, and it fails
+the same ways the script does. When a parameter's *name* looks like configuration and its default
+*resolves* to a real path, the preflight checks it: exists, parses, and is somewhere the task
+account can actually read (a config in your user profile or on a UNC share gets the same warning
+the script would). `.psd1` is read with `Import-PowerShellDataFile`, which refuses dynamic
+expressions rather than evaluating them; `.json` with `ConvertFrom-Json`. Top-level keys are
+listed so you can confirm it is the file you meant — nothing is interpreted, because the tool
+cannot know what any of those keys mean.
+
 ## Preflight (`Test-PSTaskPlan`)
 
 Every check answers one question: *this works in my console — will it still work when Task

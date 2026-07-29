@@ -646,18 +646,23 @@ function Show-PSTaskEditor {
                 $valueControl = $box
             }
 
-            # Pre-fill from the script's own declared default, so the form shows what will
-            # actually be used. Without this the preview showed '-DaysOut 14' while the DaysOut
-            # box sat empty, which reads as a bug even though both were "right".
-            # Expression defaults - (Get-Date), $PSScriptRoot - are deliberately left blank:
-            # they are the script's to evaluate at run time, and this must never execute them.
+            # Defaults are handled in two different ways on purpose.
+            #
+            #   Literal   ('Normal', 14)  - pre-filled as a real VALUE, so the form and the
+            #                               command preview agree.
+            #   Resolved  ((Join-Path $env:ProgramData 'Acme\Logs'))
+            #                             - shown as a greyed CUE, never as a value. The script
+            #                               computes it itself at run time; passing it would
+            #                               freeze anything time-dependent and hide where the
+            #                               value came from. Nothing was executed to work it
+            #                               out - see Resolve-PSTaskDefaultValue.
+            #   Unresolved                - the source text is shown as the cue, so the operator
+            #                               still sees what the script will do.
             if ($meta.HasDefault -and -not $meta.IsSwitch) {
-                $literal = $null
-                $dv = [string]$meta.DefaultValue
-                if ($dv -match '^[''"](.*)[''"]$') { $literal = $Matches[1] }
-                elseif ($dv -match '^-?\d+(\.\d+)?$') { $literal = $dv }
+                $kind = [string]$meta.DefaultKind
 
-                if ($null -ne $literal) {
+                if ($kind -eq 'Literal') {
+                    $literal = [string]$meta.ResolvedDefault.Value
                     if ($valueControl -is [System.Windows.Forms.ComboBox]) {
                         $i = $valueControl.Items.IndexOf($literal)
                         if ($i -ge 0) { $valueControl.SelectedIndex = $i }
@@ -665,6 +670,10 @@ function Show-PSTaskEditor {
                     elseif ($valueControl -is [System.Windows.Forms.TextBox] -and -not $valueControl.ReadOnly) {
                         $valueControl.Text = $literal
                     }
+                }
+                elseif ($valueControl -is [System.Windows.Forms.TextBox] -and -not $valueControl.ReadOnly) {
+                    $cue = if ($kind -eq 'Resolved') { [string]$meta.ResolvedDefault.Value } else { [string]$meta.DefaultValue }
+                    if ($cue) { Set-PSTaskUICueBanner -TextBox $valueControl -Text $cue }
                 }
             }
 
@@ -678,9 +687,20 @@ function Show-PSTaskEditor {
                 if ($lbl) { $lbl.ForeColor = $t.Accent; $lbl.Font = $t.FontBold }
             }
 
-            if ($meta.Description) {
+            $tipLines = @()
+            if ($meta.Description) { $tipLines += $meta.Description }
+            if ($meta.HasDefault -and $meta.DefaultKind -eq 'Resolved') {
+                $tipLines += "Script default: $($meta.ResolvedDefault.Value)"
+                $tipLines += "  from  $($meta.DefaultValue)"
+                $tipLines += 'Leave blank to let the script work this out itself.'
+            }
+            elseif ($meta.HasDefault -and $meta.DefaultKind -eq 'Unresolved') {
+                $tipLines += "Script default: $($meta.DefaultValue)"
+                $tipLines += 'Computed by the script at run time; leave blank to use it.'
+            }
+            if ($tipLines.Count -gt 0) {
                 $tip = New-Object System.Windows.Forms.ToolTip
-                $tip.SetToolTip($valueControl, $meta.Description)
+                $tip.SetToolTip($valueControl, ($tipLines -join [Environment]::NewLine))
             }
 
             $state.ParamControls[$meta.Name] = @{ Control = $valueControl; Meta = $meta }

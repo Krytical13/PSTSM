@@ -15,6 +15,52 @@
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
+# TextBox.PlaceholderText only exists from .NET Core 3.0, and this has to work on Windows
+# PowerShell 5.1 / .NET Framework. EM_SETCUEBANNER is the native equivalent and has been on
+# every Edit control since XP.
+if (-not ('PSTaskBuilderNative.Win32' -as [type])) {
+    try {
+        Add-Type -Namespace 'PSTaskBuilderNative' -Name 'Win32' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr SendMessage(System.IntPtr hWnd, int msg, System.IntPtr wParam, string lParam);
+'@ -ErrorAction Stop
+    }
+    catch { Write-Verbose "Cue-banner interop unavailable: $($_.Exception.Message)" }
+}
+
+function Set-PSTaskUICueBanner {
+    <#
+    .SYNOPSIS
+        Shows greyed hint text inside an empty textbox, which disappears as soon as the user
+        types.
+    .DESCRIPTION
+        Used for parameter defaults the script computes for itself. The value must be VISIBLE
+        (so the form does not look like it knows nothing) without being a VALUE (so it is not
+        put on the command line and the script still evaluates it at run time). A cue banner is
+        exactly that distinction rendered in the UI.
+
+        Silently does nothing if the interop is unavailable - a missing hint is cosmetic.
+    .PARAMETER TextBox
+        Target textbox.
+    .PARAMETER Text
+        Hint to display.
+    .OUTPUTS
+        None.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox,
+        [AllowEmptyString()][string]$Text
+    )
+
+    if (-not ('PSTaskBuilderNative.Win32' -as [type])) { return }
+    try {
+        # wParam 1 keeps the cue visible while the box has focus, until a character is typed.
+        [void][PSTaskBuilderNative.Win32]::SendMessage($TextBox.Handle, 0x1501, [IntPtr]1, $Text)
+    }
+    catch { Write-Verbose "Could not set cue banner: $($_.Exception.Message)" }
+}
+
 function Get-PSTaskUITheme {
     <#
     .SYNOPSIS

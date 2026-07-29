@@ -17,6 +17,8 @@
         # Script analysis - the "select the script and the form fills itself in" half
         'Get-PSTaskEngine'
         'Get-PSTaskScriptProfile'
+        'Resolve-PSTaskDefaultValue'
+        'Get-PSTaskScriptConfigFile'
 
         # Plan construction and validation
         'New-PSTaskPlan'

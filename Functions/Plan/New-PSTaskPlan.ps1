@@ -128,12 +128,12 @@ function New-PSTaskPlan {
         if ($p.IsCredential -or $p.IsSecure) { continue }
         if (-not $p.HasDefault) { continue }
 
-        $text = $p.DefaultValue
-        if ($text -match '^[''"](.*)[''"]$') { $resolvedParameters[$p.Name] = $Matches[1] }
-        elseif ($text -match '^-?\d+$') { $resolvedParameters[$p.Name] = [int]$text }
-        elseif ($text -match '(?i)^\$true$') { $resolvedParameters[$p.Name] = $true }
-        elseif ($text -match '(?i)^\$false$') { $resolvedParameters[$p.Name] = $false }
-        # anything else is an expression - leave it to the script
+        # Only LITERAL defaults are seeded. An expression default - even one whose value is
+        # known, like (Join-Path $PSScriptRoot 'settings.psd1') - is deliberately left out, so
+        # the script evaluates it at run time. Passing it would freeze anything time-dependent
+        # and put a value on the command line that the operator never chose.
+        if ($p.DefaultKind -ne 'Literal') { continue }
+        $resolvedParameters[$p.Name] = $p.ResolvedDefault.Value
     }
     if ($Parameters) {
         foreach ($k in $Parameters.Keys) { $resolvedParameters[$k] = $Parameters[$k] }
