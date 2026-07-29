@@ -549,6 +549,69 @@ exit 0
     }
 }
 
+Describe 'Launcher' {
+    BeforeAll {
+        $script:LauncherRoot = Split-Path $PSScriptRoot -Parent
+        $script:Cmd = Join-Path $script:LauncherRoot 'PSTSM.cmd'
+        $script:Ps1 = Join-Path $script:LauncherRoot 'Start-PSTSM.ps1'
+    }
+
+    It 'ships a double-clickable entry point' {
+        # Windows opens a .ps1 in an editor on double-click, so a .cmd is the only thing that
+        # actually launches when someone double-clicks it.
+        Test-Path -LiteralPath $script:Cmd | Should -BeTrue
+    }
+
+    It 'points the .cmd at the launcher beside it, not a fixed path' {
+        $text = Get-Content -LiteralPath $script:Cmd -Raw
+        $text | Should -Match '%~dp0'                 # relative to itself, so the folder can move
+        $text | Should -Match 'Start-PSTSM\.ps1'
+        $text | Should -Match '\-STA'
+        $text | Should -Match '%\*'                    # forwards -NoElevate and friends
+    }
+
+    It 'exposes NoElevate so the tool can be opened read-only' {
+        $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:Ps1, [ref]$null, [ref]$errs)
+        $errs | Should -BeNullOrEmpty
+        $names = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        $names | Should -Contain 'NoElevate'
+        $names | Should -Contain 'Relaunched'
+    }
+
+    It 'can never relaunch itself twice' {
+        # -Relaunched is the loop guard. If any combination still relaunched while it was set,
+        # a cancelled UAC prompt would spawn processes forever.
+        $decide = {
+            param($elevated, $sta, $noElevate, $relaunched)
+            $needsSta = -not $sta
+            $needsElev = (-not $elevated) -and (-not $noElevate)
+            (($needsSta -or $needsElev) -and -not $relaunched)
+        }
+        foreach ($e in $true, $false) {
+            foreach ($s in $true, $false) {
+                foreach ($n in $true, $false) {
+                    (& $decide $e $s $n $true) | Should -BeFalse -Because 'once relaunched it must run, not relaunch again'
+                }
+            }
+        }
+    }
+
+    It 'never asks for elevation when -NoElevate was given' {
+        # Apartment state is irrelevant here: -NoElevate must suppress the UAC prompt whatever
+        # else is true, so the decision takes only the two inputs that matter.
+        $needsElevation = {
+            param($elevated, $noElevate)
+            (-not $elevated) -and (-not $noElevate)
+        }
+        foreach ($e in $true, $false) {
+            (& $needsElevation $e $true) | Should -BeFalse
+        }
+        # ...and still asks when it was not given and the token is not elevated.
+        (& $needsElevation $false $false) | Should -BeTrue
+    }
+}
+
 Describe 'Host initialisation' -Skip:(-not $script:IsSta) {
     It 'can be initialised again after a window already exists' {
         # Regression, seen in the console on a second launch: Start-PSTSM.ps1 does

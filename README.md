@@ -16,13 +16,29 @@ be derived, defaults the rest sensibly, and names the specific ways a task fails
 
 ## Run it
 
+**Double-click `PSTSM.cmd`.**
+
+That's the entry point because Windows opens a `.ps1` in an editor rather than running it. It
+hands off to `Start-PSTSM.ps1`, which sorts out the two things that have to be true before the
+window can open — in a single relaunch, not two:
+
+- **Elevation.** Registering, editing or deleting a task needs an administrator token, as do
+  `Install-ADServiceAccount` and the batch-logon right. You'll get one UAC prompt.
+- **STA apartment.** WinForms requires it. `powershell.exe` defaults to STA; `pwsh` starts MTA,
+  where a form either throws or deadlocks on its first dialog.
+
+Elevating keeps you as **you**, with an administrator token. If your own account isn't an
+administrator, UAC asks for one that is and Windows then runs the tool as *that* account —
+which changes whose tasks you see and who new ones are attributed to. That's Windows' behaviour,
+not a choice this tool makes, but it explains a list that suddenly looks different.
+
+Just want a look? Nothing is blocked read-only:
+
 ```
-.\Start-PSTSM.ps1
+PSTSM.cmd -NoElevate          .\Start-PSTSM.ps1 -NoElevate
 ```
 
-That opens the task list. The launcher handles the STA relaunch that `pwsh` needs — WinForms
-requires an STA apartment and `pwsh` starts MTA, where a form either throws or deadlocks on its
-first dialog.
+The list, editor, health sweep and run logs all work; only saving needs the rights.
 
 **Main window** — every scheduled task, defaulting to the PowerShell ones and hiding the
 built-in `\Microsoft\` tree (both are toggles). Unlike the built-in console it shows the actual
@@ -396,6 +412,31 @@ Two things worth reading first:
   load-bearing and were established by experiment; the comments say which and why.
 - Run both suites under **`powershell.exe`** as well as `pwsh`. Windows PowerShell 5.1 is where
   the binder bugs surface, and the UI form tests skip themselves under MTA.
+
+## Health sweep and run logs
+
+**Health** scans every task and lists the ones that are quietly broken — script deleted, module
+uninstalled, settings file gone, S4U against a script that needs the network, plus what Task
+Scheduler recorded: a failed last run, missed runs, triggers that have never fired, disabled but
+still scheduled. Double-click a finding to open that task.
+
+Signal-to-noise is the point. An empty next-run time is *not* a fault when the trigger is
+at-logon, on-idle, at-startup or on-event — those have no predictable next run by nature.
+Flagging them fired on nearly every vendor task, so the check is limited to time-based triggers.
+On a stock machine that is the difference between 28 findings and 12.
+
+**Last run** turns `Last Run Result: 0x1` into what actually happened: the per-run transcript for
+a task PSTSM built, or the Task Scheduler operational event log for anything else.
+
+Note that Windows ships that operational log **disabled**, so on most machines it holds nothing
+for *any* task. When there's no history the window says so and gives you the command:
+
+```
+wevtutil set-log "Microsoft-Windows-TaskScheduler/Operational" /enabled:true
+```
+
+It only records from that point on — which is why PSTSM's own Transcript logging is the source
+worth relying on.
 
 ## Next
 
