@@ -36,6 +36,8 @@
         # Task Scheduler round trip - the browse-and-edit half
         'Get-PSTSMInventory'
         'Get-PSTSMTaskOrigin'
+        'Test-PSTSMHealth'
+        'Get-PSTSMTaskRunLog'
         'Register-PSTSMPlan'
         'New-PSTSMLogWrapper'
         'ConvertTo-PSTSMCimTrigger'
@@ -59,6 +61,8 @@
         'Show-PSTSMTriggerDialog'
         'Show-PSTSMGmsaDialog'
         'Show-PSTSMAccountPicker'
+        'Show-PSTSMHealth'
+        'Show-PSTSMRunLog'
         'Initialize-PSTSMUIHost'
     )
     CmdletsToExport   = @()

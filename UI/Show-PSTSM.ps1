@@ -67,6 +67,8 @@ function Show-PSTSM {
     # --- toolbar ---------------------------------------------------------------------
     $btnNew = New-PSTSMUIButton -Text 'New task' -Primary -Width 100
     $btnEdit = New-PSTSMUIButton -Text 'Edit'
+    $btnHealth = New-PSTSMUIButton -Text 'Health' -Width 90
+    $btnLog = New-PSTSMUIButton -Text 'Last run' -Width 96
     $btnRun = New-PSTSMUIButton -Text 'Run now'
     $btnToggle = New-PSTSMUIButton -Text 'Disable'
     $btnDelete = New-PSTSMUIButton -Text 'Delete' -Danger
@@ -79,7 +81,7 @@ function Show-PSTSM {
     $toolbar.AutoSize = $true
     $toolbar.WrapContents = $true
     $toolbar.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
-    foreach ($b in @($btnNew, $btnEdit, $btnRun, $btnToggle, $btnDelete, $btnExport, $btnConsole, $btnRefresh)) {
+    foreach ($b in @($btnNew, $btnEdit, $btnRun, $btnLog, $btnHealth, $btnToggle, $btnDelete, $btnExport, $btnConsole, $btnRefresh)) {
         [void]$toolbar.Controls.Add($b)
     }
 
@@ -262,6 +264,7 @@ function Show-PSTSM {
         $has = [bool]$sel
         $btnEdit.Enabled = $has
         $btnRun.Enabled = $has
+        $btnLog.Enabled = $has
         $btnToggle.Enabled = $has
         $btnDelete.Enabled = $has
         $btnExport.Enabled = $has -and $sel.IsPowerShell
@@ -384,6 +387,31 @@ function Show-PSTSM {
                 }
             }
             $dlg.Dispose()
+        })
+
+    $btnLog.add_Click({
+            $sel = & $getSelected
+            if (-not $sel) { return }
+            Show-PSTSMRunLog -TaskName $sel.TaskName -TaskPath $sel.TaskPath -Owner $form
+        })
+
+    $btnHealth.add_Click({
+            # Health is machine-wide, so it needs no selection. If the operator picks a task to
+            # fix, drop them straight into the editor for it.
+            $open = Show-PSTSMHealth -Owner $form
+            if (-not $open) { return }
+            $leaf = Split-Path $open -Leaf
+            $folder = Split-Path $open -Parent
+            if (-not $folder.EndsWith('\')) { $folder += '\' }
+            $summary = @($state.Rows | Where-Object { $_.FullName -eq $open })[0]
+            if ($summary) { & $openEditor $summary }
+            else {
+                try { & $openEditor (Get-PSTSMInventory -TaskPath $folder -TaskName $leaf | Select-Object -First 1) }
+                catch {
+                    [System.Windows.Forms.MessageBox]::Show("Could not open $open : $($_.Exception.Message)", 'PSTSM',
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                }
+            }
         })
 
     $btnConsole.add_Click({ Start-Process 'taskschd.msc' })

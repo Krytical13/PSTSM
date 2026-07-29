@@ -736,6 +736,68 @@ Describe 'Get-PSTSMTaskOrigin' {
     }
 }
 
+Describe 'Test-PSTSMHealth' {
+    It 'sweeps the machine and returns well-formed findings' {
+        $findings = @(Test-PSTSMHealth -PowerShellOnly $false -ErrorAction SilentlyContinue)
+        foreach ($f in $findings) {
+            $f.Severity | Should -BeIn @('Error', 'Warning', 'Info')
+            $f.FullName | Should -Not -BeNullOrEmpty
+            $f.Title | Should -Not -BeNullOrEmpty
+            $f.Id | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'does not flag a logon or idle task for having no next run time' {
+        # Regression, and the reason the check is narrowed to time-based triggers: a task that
+        # fires at logon/idle/startup/on-event has no predictable next run BY NATURE. Flagging
+        # those fired on nearly every vendor task - 16 of 28 findings on a stock machine were
+        # this one false positive, which is how a health check teaches people to ignore it.
+        $findings = @(Test-PSTSMHealth -PowerShellOnly $false -ErrorAction SilentlyContinue)
+        $noNext = @($findings | Where-Object Id -eq 'NO_NEXT_RUN')
+
+        foreach ($f in $noNext) {
+            $task = Get-ScheduledTask -TaskName $f.TaskName -TaskPath $f.TaskPath -ErrorAction SilentlyContinue
+            $timeBased = @($task.Triggers | Where-Object {
+                    $null -ne $_ -and $_.CimClass.CimClassName -in @(
+                        'MSFT_TaskDailyTrigger', 'MSFT_TaskWeeklyTrigger', 'MSFT_TaskTimeTrigger',
+                        'MSFT_TaskMonthlyTrigger', 'MSFT_TaskMonthlyDOWTrigger')
+                })
+            $timeBased.Count | Should -BeGreaterThan 0 -Because "$($f.FullName) was flagged with no next run, so it must actually have a time-based trigger"
+        }
+    }
+
+    It 'reports a status code as status, not as a failure' {
+        # 0x41300-0x41304 mean ready / running / disabled / never run / no more runs. Treating
+        # those as failures would make almost every task on the machine look broken.
+        $findings = @(Test-PSTSMHealth -PowerShellOnly $false -ErrorAction SilentlyContinue)
+        foreach ($f in @($findings | Where-Object Id -eq 'RUN_FAILED')) {
+            $info = Get-ScheduledTaskInfo -TaskName $f.TaskName -TaskPath $f.TaskPath -ErrorAction SilentlyContinue
+            $u = [uint32]([int64]$info.LastTaskResult -band 0xFFFFFFFF)
+            $u | Should -Not -Be 0
+            ($u -ge 0x41300 -and $u -le 0x41304) | Should -BeFalse
+        }
+    }
+}
+
+Describe 'Get-PSTSMTaskRunLog' {
+    It 'explains why there is no history rather than implying the task never ran' {
+        # Windows ships the Task Scheduler operational log DISABLED. An empty result would read
+        # as "this task has never run", which is a different and wrong conclusion.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskPath -notlike '\Microsoft\*' })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no non-Microsoft task available'; return }
+
+        $log = @(Get-PSTSMTaskRunLog -TaskName $t.TaskName -TaskPath $t.TaskPath)[0]
+        $log.Source | Should -BeIn @('Transcript', 'EventLog', 'None')
+        if (-not $log.Available) {
+            $log.Note | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'throws a clear error for a task that does not exist' {
+        { Get-PSTSMTaskRunLog -TaskName 'PSTSM-NoSuchTask-ZZZ' -TaskPath '\' } | Should -Throw '*not found*'
+    }
+}
+
 Describe 'Editing existing tasks of every shape' {
     # These run against whatever is registered on the machine. That is deliberate: the built-in
     # \Microsoft\ tree is a free corpus of shapes nobody would think to synthesise - COM handler

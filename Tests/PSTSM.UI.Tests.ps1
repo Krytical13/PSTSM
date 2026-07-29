@@ -402,6 +402,24 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             finally { $f.Dispose() }
         }
 
+        It 'clips nothing in the health or run-log windows at a 150%-sized font' {
+            $t0 = @(Get-ScheduledTask -ErrorAction SilentlyContinue)[0]
+            $builders = @({ Show-PSTSMHealth -BuildOnly })
+            if ($t0) { $builders += { Show-PSTSMRunLog -TaskName $t0.TaskName -TaskPath $t0.TaskPath -BuildOnly } }
+
+            foreach ($build in $builders) {
+                $f = & $build
+                try {
+                    Initialize-FormLayout -Form $f
+                    $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)
+                    $f.PerformLayout()
+                    Get-ClippedControl -Root $f | Should -BeNullOrEmpty
+                    @(Get-AllControl -Root $f | Where-Object { $_.Left -lt 0 -or $_.Top -lt 0 }) | Should -BeNullOrEmpty
+                }
+                finally { $f.Dispose() }
+            }
+        }
+
         It 'clips nothing in the account picker or the gMSA dialog at a 150%-sized font' {
             # These two carry the most explanatory text, so they are the likeliest to overflow
             # once the font grows.
