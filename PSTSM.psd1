@@ -35,6 +35,7 @@
 
         # Task Scheduler round trip - the browse-and-edit half
         'Get-PSTSMInventory'
+        'Get-PSTSMTaskOrigin'
         'Register-PSTSMPlan'
         'New-PSTSMLogWrapper'
         'ConvertTo-PSTSMCimTrigger'

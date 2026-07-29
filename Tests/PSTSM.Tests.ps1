@@ -681,6 +681,61 @@ exit 0
     }
 }
 
+Describe 'Get-PSTSMTaskOrigin' {
+    BeforeAll {
+        # Must be inside BeforeAll: a function declared in the Describe body only exists during
+        # Pester's DISCOVERY phase, so It blocks would not see it at run time.
+        # Only Author, Source and TaskPath are read, so a plain object stands in for a real task.
+        function New-FakeTask($path, $author, $source) {
+            [PSCustomObject]@{ TaskPath = $path; Author = $author; Source = $source }
+        }
+    }
+
+    It 'calls anything under \Microsoft\ a Windows task' {
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\Microsoft\Windows\Defrag\' 'Whatever')).Origin | Should -Be 'Windows'
+    }
+
+    It 'treats a resource-string author as Windows even outside \Microsoft\' {
+        # Only OS components register an Author that has to be looked up in a DLL.
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' '$(@%SystemRoot%\system32\dmclient.dll,-100)')).Origin | Should -Be 'Windows'
+    }
+
+    It 'identifies a task a person created' {
+        $r = Get-PSTSMTaskOrigin -Task (New-FakeTask '\' 'CONTOSO\alice')
+        $r.Origin | Should -Be 'Person'
+        $r.Detail | Should -BeLike '*CONTOSO\alice*'
+    }
+
+    It 'does not mistake an installer for a person' {
+        # These look like DOMAIN\user but are a service and a computer account. Getting this
+        # wrong would put every vendor installer in the "somebody here made this" bucket, which
+        # is the one bucket that needs to stay trustworthy.
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' 'NT AUTHORITY\SYSTEM')).Origin | Should -Be 'App'
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' 'WORKGROUP\SOMEPC$')).Origin | Should -Be 'App'
+    }
+
+    It 'attributes a vendor string to an application' {
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' 'NVIDIA Corporation')).Origin | Should -Be 'App'
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' '' 'Zoom Communications, Inc.')).Origin | Should -Be 'App'
+    }
+
+    It 'admits when it does not know' {
+        (Get-PSTSMTaskOrigin -Task (New-FakeTask '\' '' '')).Origin | Should -Be 'Unknown'
+    }
+
+    It 'claims its own tasks first, whatever the author says' {
+        $r = Get-PSTSMTaskOrigin -Task (New-FakeTask '\Microsoft\Windows\Foo\' 'Microsoft Corporation') -IsManagedByTool $true
+        $r.Origin | Should -Be 'PSTSM'
+    }
+
+    It 'classifies every real task on this machine into a known bucket' {
+        $inv = @(Get-PSTSMInventory -IncludeMicrosoft -ErrorAction SilentlyContinue)
+        if ($inv.Count -eq 0) { Set-ItResult -Skipped -Because 'no tasks on this machine'; return }
+        @($inv | Where-Object { $_.Origin -notin 'Windows', 'App', 'Person', 'PSTSM', 'Unknown' }) | Should -BeNullOrEmpty
+        @($inv | Where-Object { -not $_.OriginDetail }) | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Editing existing tasks of every shape' {
     # These run against whatever is registered on the machine. That is deliberate: the built-in
     # \Microsoft\ tree is a free corpus of shapes nobody would think to synthesise - COM handler

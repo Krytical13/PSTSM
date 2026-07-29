@@ -62,6 +62,9 @@ function Get-PSTSMInventory {
 
         $principal = $task.Principal
 
+        $managedByTool = [bool]($parsed -and $parsed.ScriptPath -and $parsed.ScriptPath -match '\\\.pstsm\\.+\.wrapper\.ps1$')
+        $origin = Get-PSTSMTaskOrigin -Task $task -IsManagedByTool $managedByTool
+
         [PSCustomObject]@{
             PSTypeName       = 'PSTSM.TaskSummary'
 
@@ -98,7 +101,12 @@ function Get-PSTSMInventory {
             Arguments        = if ($action) { $action.Arguments } else { $null }
 
             # True when the action points at a wrapper this tool generated.
-            IsManagedByTool  = [bool]($parsed -and $parsed.ScriptPath -and $parsed.ScriptPath -match '\\\.pstsm\\.+\.wrapper\.ps1$')
+            IsManagedByTool  = $managedByTool
+
+            # Who put this here: Windows / App / Person / PSTSM / Unknown. The question an admin
+            # is actually asking of a 288-row list.
+            Origin           = $origin.Origin
+            OriginDetail     = $origin.Detail
 
             TriggerSummary   = (ConvertFrom-PSTSMTriggerSummary -Triggers $task.Triggers)
             TriggerCount     = @($task.Triggers).Count

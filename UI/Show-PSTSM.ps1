@@ -152,8 +152,9 @@ function Show-PSTSM {
     # Fill weights, not pixels. 'State' gets more than its text suggests because 'Disabled' and
     # 'Running' are the values that matter and they truncate first; 'Folder' is usually '\'.
     & $addColumn 'TaskName' 'Name' 130 $true
-    & $addColumn 'TaskPath' 'Folder' 65 $true
-    & $addColumn 'State' 'State' 80 $true
+    & $addColumn 'Origin' 'Origin' 62 $true
+    & $addColumn 'TaskPath' 'Folder' 60 $true
+    & $addColumn 'State' 'State' 78 $true
     & $addColumn 'ScriptName' 'Script' 130 $true
     & $addColumn 'EngineId' 'Engine' 60 $true
     & $addColumn 'TriggerSummary' 'Schedule' 140 $true
@@ -199,8 +200,10 @@ function Show-PSTSM {
         $needle = $txtFilter.Text.Trim()
         $rows = $state.Rows
         if ($needle) {
+            # Origin is searchable too, so "person" or "pstsm" narrows the list to what somebody
+            # here actually created - the usual reason for opening this window.
             $rows = @($rows | Where-Object {
-                    ("$($_.TaskName) $($_.TaskPath) $($_.ScriptName) $($_.ScriptPath) $($_.UserId) $($_.Description)") -like "*$needle*"
+                    ("$($_.TaskName) $($_.TaskPath) $($_.ScriptName) $($_.ScriptPath) $($_.UserId) $($_.Description) $($_.Origin) $($_.Author)") -like "*$needle*"
                 })
         }
 
@@ -217,6 +220,7 @@ function Show-PSTSM {
 
             $i = $grid.Rows.Add(
                 $r.TaskName,
+                $r.Origin,
                 $r.TaskPath,
                 $r.State,
                 $(if ($r.ScriptName) { $r.ScriptName } else { '-' }),
@@ -229,6 +233,16 @@ function Show-PSTSM {
             )
             $row = $grid.Rows[$i]
             $row.Tag = $r
+
+            # Origin is carried by the word itself; colour only reinforces it, so the column
+            # still reads correctly in greyscale or for a colour-blind operator.
+            $row.Cells['Origin'].ToolTipText = [string]$r.OriginDetail
+            switch ($r.Origin) {
+                'PSTSM' { $row.Cells['Origin'].Style.ForeColor = $t.Accent }
+                'Person' { $row.Cells['Origin'].Style.ForeColor = $t.Good }
+                'Windows' { $row.Cells['Origin'].Style.ForeColor = $t.Muted }
+                'Unknown' { $row.Cells['Origin'].Style.ForeColor = $t.Warn }
+            }
 
             if ($r.State -eq 'Disabled') { $row.DefaultCellStyle.ForeColor = $t.Muted }
             if ($r.IsPowerShell -and -not $r.IsRecognized) { $row.Cells['ScriptName'].Style.ForeColor = $t.Warn }
