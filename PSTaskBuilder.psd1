@@ -54,6 +54,7 @@
         'Show-PSTaskTriggerDialog'
         'Show-PSTaskGmsaDialog'
         'Show-PSTaskAccountPicker'
+        'Initialize-PSTaskUIHost'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

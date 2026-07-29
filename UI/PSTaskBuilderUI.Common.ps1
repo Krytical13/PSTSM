@@ -114,10 +114,19 @@ function Initialize-PSTaskUIHost {
     [CmdletBinding()]
     param()
 
-    if ($script:PSTaskUIHostReady) { return }
+    # The flag lives on the AppDomain, not in $script: scope. Start-PSTaskBuilder.ps1 does
+    # Import-Module -Force on every launch, which resets module scope - so a second run in the
+    # same PowerShell session re-entered this after windows already existed.
+    if ([System.AppDomain]::CurrentDomain.GetData('PSTaskBuilderUIHostReady')) { return }
 
     [System.Windows.Forms.Application]::EnableVisualStyles()
-    [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
+
+    # Throws "must be called before the first IWin32Window object is created" once anything in
+    # the process has made a window - another PowerShell GUI, a file dialog, a previous run.
+    # It only selects the text-rendering back end, so losing it is cosmetic and must never stop
+    # the tool from opening.
+    try { [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false) }
+    catch { Write-Verbose "SetCompatibleTextRenderingDefault skipped: $($_.Exception.Message)" }
 
     # No-op on Windows PowerShell 5.1; present from .NET Core 3.0 onwards.
     try { [System.Windows.Forms.Application]::SetHighDpiMode([System.Windows.Forms.HighDpiMode]::SystemAware) | Out-Null } catch { Write-Verbose 'SetHighDpiMode unavailable on this runtime.' }
@@ -143,7 +152,7 @@ function Initialize-PSTaskUIHost {
     }
     catch { Write-Verbose "Could not install thread-exception handler: $($_.Exception.Message)" }
 
-    $script:PSTaskUIHostReady = $true
+    [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $true)
 }
 
 function Get-PSTaskUIScale {

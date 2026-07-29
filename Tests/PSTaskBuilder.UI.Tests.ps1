@@ -406,6 +406,42 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             }
         }
 
+        It 'keeps the left pane from growing sideways on a script with a long derived line' {
+            # Regression, reported from real use: picking a SECOND script pushed the Browse
+            # button off the right edge. The derived-info label is AutoSize with no cap, so
+            # "Engine: ... | Modules: a, b, c, d, e" measured ~1050px against a ~690px pane and
+            # widened the whole stack. The first script happened to have a short line, which is
+            # why it only appeared on the second.
+            $rich = Join-Path $TestDrive 'Invoke-ManyModules.ps1'
+            @'
+#Requires -Version 5.1
+#Requires -Modules ActiveDirectory, ExchangeOnlineManagement, Microsoft.Graph.Users, Microsoft.Graph.Groups, ImportExcel
+param(
+    [Parameter(Mandatory)][string]$PrimarySmtpRelayServerHostName,
+    [string]$VeryLongParameterNameForTheOutputDirectoryPath = 'C:\Out'
+)
+exit 0
+'@ | Set-Content -LiteralPath $rich -Encoding UTF8
+
+            $f = Show-PSTaskEditor -ScriptPath $rich -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                $all = Get-AllControl -Root $f
+                $scroll = @($all | Where-Object { $_ -is [System.Windows.Forms.Panel] -and $_.AutoScroll })[0]
+                $scroll | Should -Not -BeNullOrEmpty
+
+                $browse = @($all | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -eq 'Browse...' })[0]
+                $browse | Should -Not -BeNullOrEmpty
+                $browse.Right | Should -BeLessOrEqual $scroll.ClientSize.Width
+
+                # The pane must not want to be wider than it is; that is what produced the
+                # horizontal overflow in the first place.
+                $stackPanel = @($scroll.Controls)[0]
+                $stackPanel.PreferredSize.Width | Should -BeLessOrEqual $scroll.ClientSize.Width
+            }
+            finally { $f.Dispose() }
+        }
+
         It 'opens no larger than the screen' {
             # A 1180x780 design becomes 1770x1170 at 150%, which would put the action bar below
             # the bottom edge of a 1080p display.
@@ -479,6 +515,33 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             $spec.At | Should -BeLike '*T07:00:00'
             $spec.Enabled | Should -BeTrue
         }
+    }
+}
+
+Describe 'Host initialisation' -Skip:(-not $script:IsSta) {
+    It 'can be initialised again after a window already exists' {
+        # Regression, seen in the console on a second launch: Start-PSTaskBuilder.ps1 does
+        # Import-Module -Force, which resets module scope, so the old $script: guard did not
+        # hold. SetCompatibleTextRenderingDefault then threw "must be called before the first
+        # IWin32Window object is created". The guard now lives on the AppDomain, and the call
+        # itself is wrapped because losing it is only cosmetic.
+        Initialize-PSTaskUIHost
+        $probe = New-Object System.Windows.Forms.Form
+        $null = $probe.Handle          # guarantee a window exists in this process
+        try {
+            # Clear the flag to force the body to run again, exactly as a -Force re-import does.
+            [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $null)
+            { Initialize-PSTaskUIHost } | Should -Not -Throw
+        }
+        finally {
+            $probe.Dispose()
+            [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $true)
+        }
+    }
+
+    It 'is a no-op once already initialised' {
+        Initialize-PSTaskUIHost
+        { Initialize-PSTaskUIHost } | Should -Not -Throw
     }
 }
 

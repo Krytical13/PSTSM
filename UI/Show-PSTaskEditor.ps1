@@ -776,6 +776,25 @@ function Show-PSTaskEditor {
         & $refresh
     }
 
+    # Keeps the left pane from growing sideways. It is a vertically-scrolling column, but every
+    # AutoSize label in it reports whatever width its text wants - and the derived-engine line
+    # ("Engine: ... | Modules: a, b, c, d, e") is easily 1000px for a script with several
+    # #Requires -Modules. That widened the whole stack and pushed the Browse button off the
+    # right edge, which only showed up on the SECOND script picked, because the first happened
+    # to have a short line.
+    #
+    # Capping MaximumSize makes such labels wrap instead of widen. It is applied to the stack
+    # as well, so any control added later cannot reintroduce this.
+    $fitLeftPane = {
+        if (-not $leftScroll -or $leftScroll.IsDisposed) { return }
+        $w = $leftScroll.ClientSize.Width - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 2
+        if ($w -lt 200) { return }
+        $cap = New-Object System.Drawing.Size($w, 0)     # 0 height = unbounded, grow downward
+        $leftStack.MaximumSize = $cap
+        $lblDerived.MaximumSize = $cap
+    }
+    $leftScroll.add_Resize({ if ($fitLeftPane) { & $fitLeftPane } })
+
     # --- wiring ----------------------------------------------------------------------
     $btnBrowseScript.add_Click({
             $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -1081,6 +1100,7 @@ function Show-PSTaskEditor {
     }
 
     $state.Suspend = $false
+    & $fitLeftPane
     & $refreshTriggers
 
     if ($state.Locked) {
