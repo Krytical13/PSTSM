@@ -32,7 +32,9 @@ function Show-PSTaskTriggerDialog {
     $t = Get-PSTaskUITheme
 
     $form = New-PSTaskUIForm -Title $(if ($Trigger) { 'Edit trigger' } else { 'Add trigger' }) -Width 470 -Height 470
-    $form.FormBorderStyle = 'FixedDialog'
+    # Sizable, not FixedDialog: a fixed dialog cannot be resized if the content still overflows
+    # at an unusual scale or font size, which leaves the OK button unreachable.
+    $form.FormBorderStyle = 'Sizable'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
     $form.MinimumSize = New-Object System.Drawing.Size(0, 0)
@@ -54,7 +56,7 @@ function Show-PSTaskTriggerDialog {
     $stack.AutoSize = $true
     $stack.AutoSizeMode = 'GrowAndShrink'
     $stack.ColumnCount = 1
-    $stack.Width = 410
+    # No explicit Width - Dock='Top' tracks the scroll panel, which tracks the form.
 
     # --- controls -------------------------------------------------------------------
     $cboType = New-Object System.Windows.Forms.ComboBox

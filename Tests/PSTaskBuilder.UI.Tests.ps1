@@ -77,6 +77,20 @@ exit 0
         $Form.CreateControl()
         $Form.PerformLayout()
     }
+
+    # Any control whose rendered size is smaller than the size it says it needs is clipping.
+    function Get-ClippedControl {
+        param([System.Windows.Forms.Control]$Root)
+        $bad = New-Object System.Collections.Generic.List[string]
+        foreach ($c in (Get-AllControl -Root $Root)) {
+            if ($c -isnot [System.Windows.Forms.Button] -and $c -isnot [System.Windows.Forms.Label]) { continue }
+            $p = $c.PreferredSize
+            if ($c.Width -lt $p.Width -or $c.Height -lt $p.Height) {
+                $bad.Add("$($c.GetType().Name) '$($c.Text)': $($c.Width)x$($c.Height) < needs $($p.Width)x$($p.Height)")
+            }
+        }
+        $bad.ToArray()
+    }
 }
 
 Describe 'UI source lint (Windows PowerShell 5.1 hazards)' {
@@ -249,6 +263,59 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             catch { $caught = $_ }
             finally { $f.Close(); $f.Dispose() }
             $caught | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'display scaling' {
+        # Regression. The first build gave every button a fixed Width/Height and the field
+        # tables a fixed 132px label column. That is fine at 100% and clips the caption on any
+        # machine at 125% or 150% - which is most of them. A form built in PowerShell never
+        # auto-scales (AutoScaleMode works off AutoScaleDimensions, which only the designer
+        # emits), so the font grows with DPI while pixel constants do not.
+        #
+        # These tests run at whatever DPI the host reports, then re-run at an inflated font,
+        # which reproduces exactly that mismatch without needing a high-DPI machine.
+        It 'clips no button or label in the editor at the current font' {
+            $f = Show-PSTaskEditor -ScriptPath $script:Fixture -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                Get-ClippedControl -Root $f | Should -BeNullOrEmpty
+            }
+            finally { $f.Dispose() }
+        }
+
+        It 'clips no button or label in the editor at a 150%-sized font' {
+            $f = Show-PSTaskEditor -ScriptPath $script:Fixture -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)   # 9pt * 1.5
+                $f.PerformLayout()
+                Get-ClippedControl -Root $f | Should -BeNullOrEmpty
+            }
+            finally { $f.Dispose() }
+        }
+
+        It 'clips no button or label in the main window at a 150%-sized font' {
+            $f = Show-PSTaskBuilder -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)
+                $f.PerformLayout()
+                Get-ClippedControl -Root $f | Should -BeNullOrEmpty
+            }
+            finally { $f.Dispose() }
+        }
+
+        It 'opens no larger than the screen' {
+            # A 1180x780 design becomes 1770x1170 at 150%, which would put the action bar below
+            # the bottom edge of a 1080p display.
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+            $f = Show-PSTaskEditor -BuildOnly
+            try {
+                $f.Width | Should -BeLessOrEqual $screen.Width
+                $f.Height | Should -BeLessOrEqual $screen.Height
+            }
+            finally { $f.Dispose() }
         }
     }
 

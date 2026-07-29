@@ -100,16 +100,47 @@ function Initialize-PSTaskUIHost {
     $script:PSTaskUIHostReady = $true
 }
 
+function Get-PSTaskUIScale {
+    <#
+    .SYNOPSIS
+        Returns the display scale factor (1.0 at 100%, 1.5 at 150%).
+    .DESCRIPTION
+        These forms run with AutoScaleMode 'None' because WinForms' font-based scaling resizes
+        the form out from under any explicit ClientSize (see New-PSTaskUIForm). That makes the
+        scale factor ours to apply.
+
+        Anything that can size itself should: AutoSize controls and AutoSize table columns need
+        no factor at all. This is only for the few dimensions that must be given a number, such
+        as the initial window size and a filter box width.
+    .OUTPUTS
+        [double]
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $g = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+        $dpi = $g.DpiX
+        $g.Dispose()
+        if ($dpi -gt 0) { return [double]($dpi / 96.0) }
+    }
+    catch { Write-Verbose "Could not read display DPI: $($_.Exception.Message)" }
+    1.0
+}
+
 function New-PSTaskUIForm {
     <#
     .SYNOPSIS
         Creates a themed top-level form with sane scaling defaults.
+    .DESCRIPTION
+        Width and Height are given at 100% scaling and multiplied by the current display scale,
+        because nothing here scales itself.
     .PARAMETER Title
         Window title.
     .PARAMETER Width
-        Client width.
+        Client width at 100% scaling.
     .PARAMETER Height
-        Client height.
+        Client height at 100% scaling.
     .OUTPUTS
         [System.Windows.Forms.Form]
     #>
@@ -123,15 +154,36 @@ function New-PSTaskUIForm {
     )
 
     $t = Get-PSTaskUITheme
+    $scale = Get-PSTaskUIScale
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+
     $form = New-Object System.Windows.Forms.Form
     $form.Text = $Title
-    $form.ClientSize = New-Object System.Drawing.Size($Width, $Height)
-    $form.StartPosition = 'CenterScreen'
-    $form.AutoScaleMode = 'Font'          # with FontBase this is what makes high-DPI behave
+
+    # AutoScaleMode 'None', deliberately. With 'Font', assigning Form.Font RESIZES the form by
+    # the ratio between the new font and AutoScaleDimensions - measured here turning a 1180x780
+    # design into 1377x900 - which happens after any ClientSize we set and silently invalidates
+    # the clamp below. Every control in this UI is AutoSize or laid out by a TableLayoutPanel,
+    # so it absorbs a larger font on its own and WinForms' scaling buys nothing but surprises.
+    $form.AutoScaleMode = 'None'
     $form.Font = $t.FontBase
+
+    $form.ClientSize = New-Object System.Drawing.Size([int]($Width * $scale), [int]($Height * $scale))
+    $form.StartPosition = 'CenterScreen'
     $form.BackColor = $t.Surface
     $form.ForeColor = $t.Text
-    $form.MinimumSize = New-Object System.Drawing.Size(920, 600)
+
+    # Clamp the OUTER size - Width/Height include the caption and borders, which ClientSize does
+    # not, and it is the outer size that has to fit on screen. Laptops at high scaling have far
+    # less logical room than the design assumes: 1512x901 is a real, common working area.
+    if ($form.Width -gt $screen.Width) { $form.Width = $screen.Width }
+    if ($form.Height -gt $screen.Height) { $form.Height = $screen.Height }
+
+    # MinimumSize must never exceed what actually fits, or the form cannot be shrunk to the
+    # screen and the bottom stays unreachable.
+    $form.MinimumSize = New-Object System.Drawing.Size(
+        [Math]::Min([int](700 * $scale), $screen.Width),
+        [Math]::Min([int](480 * $scale), $screen.Height))
     $form
 }
 
@@ -204,9 +256,17 @@ function New-PSTaskUIButton {
     $t = Get-PSTaskUITheme
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $Text
-    $b.AutoSize = $false
-    $b.Width = $Width
-    $b.Height = 30
+
+    # AutoSize, with -Width acting only as a MINIMUM. A fixed Width/Height clips the caption on
+    # any machine that is not at 100% scaling: the font renders larger while a hardcoded 104x30
+    # button stays literally 104x30, so the text is cut off. Letting the button measure its own
+    # caption is correct at every DPI and needs no scale factor - which matters because the
+    # forms here run with AutoScaleMode 'None' (see New-PSTaskUIForm) and get no help from
+    # WinForms' own scaling.
+    $b.AutoSize = $true
+    $b.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $b.MinimumSize = New-Object System.Drawing.Size($Width, 0)
+    $b.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
     $b.Margin = New-Object System.Windows.Forms.Padding(4, 3, 4, 3)
     $b.FlatStyle = 'Flat'
     $b.UseVisualStyleBackColor = $false
@@ -348,7 +408,9 @@ function New-PSTaskUIFieldTable {
     $tlp.AutoSizeMode = 'GrowAndShrink'
     $tlp.ColumnCount = 2
     $tlp.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
-    [void]$tlp.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 132)))
+    # AutoSize, not a fixed 132px: at 125%/150% scaling a longer label ("Restart attempts",
+    # "Keep logs (days)") renders wider than any pixel constant chosen at 100% and gets clipped.
+    [void]$tlp.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$tlp.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
     $tlp
 }

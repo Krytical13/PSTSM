@@ -92,7 +92,7 @@ function Show-PSTaskBuilder {
     $lblFind = New-PSTaskUILabel -Text 'Filter'
     $lblFind.Margin = New-Object System.Windows.Forms.Padding(3, 9, 6, 3)
     $txtFilter = New-Object System.Windows.Forms.TextBox
-    $txtFilter.Width = 240
+    $txtFilter.Width = [int](240 * (Get-PSTaskUIScale))
     $txtFilter.BorderStyle = 'FixedSingle'
     $txtFilter.Margin = New-Object System.Windows.Forms.Padding(3, 6, 12, 3)
 
@@ -128,6 +128,11 @@ function Show-PSTaskBuilder {
     $grid.ColumnHeadersDefaultCellStyle.Font = $t.FontBold
     $grid.AlternatingRowsDefaultCellStyle.BackColor = $t.SurfaceAlt
 
+    # Row and header heights do not follow the font, so at 125%/150% scaling the default 22px
+    # row clips the text it contains. Derive them from the font actually in use.
+    $grid.RowTemplate.Height = [int]($t.FontBase.Height * 1.6)
+    $grid.ColumnHeadersHeightSizeMode = [System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode]::AutoSize
+
     $addColumn = {
         param($name, $header, $width, $fill)
         $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
@@ -143,9 +148,11 @@ function Show-PSTaskBuilder {
         [void]$grid.Columns.Add($col)
     }
 
+    # Fill weights, not pixels. 'State' gets more than its text suggests because 'Disabled' and
+    # 'Running' are the values that matter and they truncate first; 'Folder' is usually '\'.
     & $addColumn 'TaskName' 'Name' 130 $true
-    & $addColumn 'TaskPath' 'Folder' 90 $true
-    & $addColumn 'State' 'State' 60 $true
+    & $addColumn 'TaskPath' 'Folder' 65 $true
+    & $addColumn 'State' 'State' 80 $true
     & $addColumn 'ScriptName' 'Script' 130 $true
     & $addColumn 'EngineId' 'Engine' 60 $true
     & $addColumn 'TriggerSummary' 'Schedule' 140 $true

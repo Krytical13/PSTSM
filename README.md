@@ -165,6 +165,18 @@ Do not "tidy" any of them without re-running the experiment.
    `CanSelect` and `Visible` reads the *effective* value. Test seams that click a button must
    `Show()` the form first, or they silently prove nothing.
 
+7. **No fixed pixel sizes.** Buttons are `AutoSize` with the requested width as a *minimum*,
+   label columns are `AutoSize`, and list/grid row heights come from `Font.Height`. A hardcoded
+   `Width = 104` clips its caption on any machine above 100% scaling — which is most laptops.
+   The forms also run `AutoScaleMode = 'None'` on purpose: with `'Font'`, assigning `Form.Font`
+   silently resizes the form (measured: a 1180×780 design became 1377×900), which happens
+   *after* any `ClientSize` you set and invalidates it. The window size is applied explicitly
+   and clamped to the screen's working area, because a high-DPI laptop can have as little as
+   1512×901 of logical room and the action bar otherwise lands below the bottom edge.
+
+   Tests cover this by re-laying out each window at a 150%-sized font and asserting that no
+   button or label is smaller than its `PreferredSize`.
+
 ## Commands
 
 **Script analysis** — `Get-PSTaskScriptProfile`, `Get-PSTaskEngine`

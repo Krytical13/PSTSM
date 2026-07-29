@@ -109,7 +109,8 @@ function Show-PSTaskEditor {
     $leftStack.AutoSize = $true
     $leftStack.AutoSizeMode = 'GrowAndShrink'
     $leftStack.ColumnCount = 1
-    $leftStack.Width = 620
+    # No explicit Width. Dock='Top' inside the AutoScroll panel already tracks the parent's
+    # client width, and a pixel constant here would be too narrow once the font scales up.
 
     # --- script ---------------------------------------------------------------------
     $secScript = New-PSTaskUISection -Title 'Script'
@@ -163,7 +164,9 @@ function Show-PSTaskEditor {
     # --- triggers -------------------------------------------------------------------
     $secTrig = New-PSTaskUISection -Title 'Schedule'
     $lstTrig = New-Object System.Windows.Forms.ListBox
-    $lstTrig.Height = 92
+    # Sized in rows of the actual font rather than pixels, so it still shows ~5 triggers at any
+    # display scale instead of clipping to two and a half.
+    $lstTrig.Height = [int]($t.FontBase.Height * 5.5)
     $lstTrig.Dock = 'Top'
     $lstTrig.BorderStyle = 'FixedSingle'
     $lstTrig.IntegralHeight = $false
@@ -293,11 +296,13 @@ function Show-PSTaskEditor {
     $lvChecks.BorderStyle = 'FixedSingle'
     # Add columns one at a time: Columns.AddRange needs a typed ColumnHeader[], which a
     # PowerShell @(...) (Object[]) will not bind to.
-    [void]$lvChecks.Columns.Add('', 52)
-    [void]$lvChecks.Columns.Add('Check', 300)
+    # Widths are set by $sizeCheckColumns below rather than as pixel constants - a fixed 52px
+    # severity column truncates 'ERROR' to 'ERR...' as soon as the font scales up.
+    [void]$lvChecks.Columns.Add('', 10)
+    [void]$lvChecks.Columns.Add('Check', 10)
 
     $txtCheckDetail = New-PSTaskUITextBox -ReadOnly -Multiline
-    $txtCheckDetail.Height = 110
+    $txtCheckDetail.Height = [int]($t.FontBase.Height * 7)
 
     $checkHost.Controls.Add($lvChecks, 0, 0)
     $checkHost.Controls.Add($txtCheckDetail, 0, 1)
@@ -412,6 +417,27 @@ function Show-PSTaskEditor {
         $p
     }
 
+    # Severity column sized to its widest token in the current font; the Check column takes the
+    # rest, so nothing truncates until the text genuinely will not fit.
+    $sizeCheckColumns = {
+        if ($lvChecks.Items.Count -gt 0) {
+            # -2 is ListView's own "fit the widest item" sizing. TextRenderer.MeasureText
+            # under-measures here because it does not account for the control's internal cell
+            # padding, which left 'ERROR' rendering as 'ERR...'.
+            $lvChecks.Columns[0].Width = -2
+        }
+        else {
+            $lvChecks.Columns[0].Width = [System.Windows.Forms.TextRenderer]::MeasureText('ERROR', $lvChecks.Font).Width +
+            [int]($lvChecks.Font.Height)
+        }
+        # Reserve room for a vertical scrollbar even when there is not one yet, otherwise the
+        # columns overrun the moment the list grows and a horizontal scrollbar appears.
+        $rest = $lvChecks.ClientSize.Width - $lvChecks.Columns[0].Width -
+        [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 2
+        if ($rest -gt 40) { $lvChecks.Columns[1].Width = $rest }
+    }
+    $lvChecks.add_Resize({ if ($sizeCheckColumns) { & $sizeCheckColumns } })
+
     $refresh = {
         if ($state.Suspend) { return }
         $plan = & $buildPlan
@@ -453,6 +479,7 @@ function Show-PSTaskEditor {
             [void]$lvChecks.Items.Add($item)
         }
         $lvChecks.EndUpdate()
+        & $sizeCheckColumns
 
         $btnSave.Enabled = ($errorCount -eq 0) -and (-not $state.Locked)
         if ($state.Locked) {
