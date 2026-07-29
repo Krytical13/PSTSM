@@ -198,8 +198,20 @@ function Show-PSTaskEditor {
     $chkHighest = New-Object System.Windows.Forms.CheckBox
     $chkHighest.Text = 'Run with highest privileges'
     $chkHighest.AutoSize = $true
+    # Browse, not "Create gMSA" - picking an account that already exists is the normal case.
+    # The picker covers gMSAs, user/service accounts and the built-in principals, sets the
+    # matching logon type, and offers creation as a side door for the rarer case.
+    $btnPickAccount = New-PSTaskUIButton -Text 'Browse...' -Width 96
+    $acctRow = New-Object System.Windows.Forms.TableLayoutPanel
+    $acctRow.Dock = 'Top'; $acctRow.AutoSize = $true; $acctRow.ColumnCount = 2; $acctRow.RowCount = 1
+    $acctRow.Margin = New-Object System.Windows.Forms.Padding(0)
+    [void]$acctRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$acctRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $acctRow.Controls.Add($txtUser, 0, 0)
+    $acctRow.Controls.Add($btnPickAccount, 1, 0)
+
     Add-PSTaskUIField -Table $tblWho -Label 'When' -Control $cboLogon
-    Add-PSTaskUIField -Table $tblWho -Label 'Account' -Control $txtUser
+    Add-PSTaskUIField -Table $tblWho -Label 'Account' -Control $acctRow
     Add-PSTaskUIField -Table $tblWho -Label '' -Control $chkHighest
     Add-PSTaskUIStacked -Stack $secWho.Content -Control $tblWho
     Add-PSTaskUIStacked -Stack $leftStack -Control $secWho.Container
@@ -859,6 +871,29 @@ function Show-PSTaskEditor {
             elseif ($chosen -ne 'ServiceAccount' -and $txtUser.Text -eq 'SYSTEM') {
                 $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
             }
+        })
+
+    $btnPickAccount.add_Click({
+            # Open the picker on the tab matching the current choice, so someone who already
+            # selected gMSA is not shown every user in the domain.
+            $keys = @($logonChoices.Keys)
+            $chosen = if ($cboLogon.SelectedIndex -ge 0) { $keys[$cboLogon.SelectedIndex] } else { 'All' }
+            $initial = switch ($chosen) {
+                'gMSA' { 'gMSA' }
+                'ServiceAccount' { 'BuiltIn' }
+                default { 'All' }
+            }
+
+            $picked = Show-PSTaskAccountPicker -InitialType $initial -Owner $form
+            if (-not $picked) { return }
+
+            $txtUser.Text = $picked.Name
+
+            # Set the logon type to match. Picking a gMSA and leaving the type on S4U produces a
+            # task that cannot register, so the two move together.
+            $idx = [array]::IndexOf($keys, $picked.SuggestedLogonType)
+            if ($idx -ge 0) { $cboLogon.SelectedIndex = $idx }
+            & $refresh
         })
 
     $cboInstances.SelectedItem = 'IgnoreNew'

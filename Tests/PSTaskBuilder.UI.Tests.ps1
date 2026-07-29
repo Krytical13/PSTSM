@@ -318,6 +318,23 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             finally { $f.Dispose() }
         }
 
+        It 'clips nothing in the account picker or the gMSA dialog at a 150%-sized font' {
+            # These two carry the most explanatory text, so they are the likeliest to overflow
+            # once the font grows.
+            foreach ($build in @({ Show-PSTaskAccountPicker -BuildOnly }, { Show-PSTaskGmsaDialog -BuildOnly })) {
+                $f = & $build
+                try {
+                    Initialize-FormLayout -Form $f
+                    $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)
+                    $f.PerformLayout()
+                    Get-ClippedControl -Root $f | Should -BeNullOrEmpty
+                    @(Get-AllControl -Root $f | Where-Object { $_.Left -lt 0 -or $_.Top -lt 0 }) | Should -BeNullOrEmpty
+                    $f.Height | Should -BeLessOrEqual ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height)
+                }
+                finally { $f.Dispose() }
+            }
+        }
+
         It 'opens no larger than the screen' {
             # A 1180x780 design becomes 1770x1170 at 150%, which would put the action bar below
             # the bottom edge of a 1080p display.
@@ -328,6 +345,49 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
                 $f.Height | Should -BeLessOrEqual $screen.Height
             }
             finally { $f.Dispose() }
+        }
+    }
+
+    Context 'the account picker and gMSA utility' {
+        It 'always offers the built-in principals, even with no domain' {
+            # A workgroup machine must not get an empty picker - SYSTEM is a valid and often
+            # correct answer, and is available without any directory at all.
+            $rows = @(Get-PSTaskRunAsAccount -Type BuiltIn)
+            @($rows | ForEach-Object { $_.Name }) | Should -Contain 'SYSTEM'
+            ($rows | Where-Object Name -eq 'SYSTEM').SuggestedLogonType | Should -Be 'ServiceAccount'
+        }
+
+        It 'pairs every account with the logon type it needs' {
+            # Account and logon type are one decision; a row that did not carry its own type
+            # would let the editor set a gMSA with LogonType S4U, which cannot register.
+            foreach ($r in @(Get-PSTaskRunAsAccount)) {
+                $r.SuggestedLogonType | Should -BeIn @('gMSA', 'Password', 'ServiceAccount', 'S4U')
+            }
+        }
+
+        It 'reports gMSA prerequisites without hanging when there is no domain' {
+            $checks = @(Test-PSTaskGmsaPrerequisite)
+            $checks.Count | Should -BeGreaterThan 0
+            @($checks | ForEach-Object { $_.Severity }) | Should -Not -Contain $null
+        }
+
+        It 'explains what the KDS root key is, not just that it is missing' {
+            # The whole point of the guided flow: an admin who has never used gMSAs should
+            # learn why this exists rather than be handed a command to paste.
+            $checks = @(Test-PSTaskGmsaPrerequisite)
+            $kds = $checks | Where-Object Id -in 'GMSAPRE_NOKDSKEY', 'GMSAPRE_KDS_OK', 'GMSAPRE_KDS_PENDING', 'GMSAPRE_NODC'
+            $kds | Should -Not -BeNullOrEmpty
+        }
+
+        It 'refuses to guess a gMSA name that cannot fit in a sAMAccountName' {
+            { New-PSTaskGmsa -Name 'this_name_is_far_too_long' `
+                    -PrincipalsAllowedToRetrieveManagedPassword 'grp' -WhatIf } |
+                Should -Throw '*cannot exceed 15 characters*'
+        }
+
+        It 'builds the picker and the gMSA dialog without a domain' {
+            { $null = Show-PSTaskAccountPicker -SelfTest } | Should -Not -Throw
+            { $null = Show-PSTaskGmsaDialog -SelfTest } | Should -Not -Throw
         }
     }
 

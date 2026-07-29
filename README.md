@@ -151,7 +151,41 @@ default. If `Test-ADServiceAccount` returns false, the usual cause is that the h
 `PrincipalsAllowedToRetrieveManagedPassword` but has not rebooted, so its Kerberos ticket does
 not yet carry the new membership.
 
-The tool does not create gMSAs or the KDS root key.
+### Choosing the account
+
+**Browse…** next to the Account field opens a picker covering existing gMSAs, user/service
+accounts, and the built-in principals, filterable by type and name. Every entry carries the
+logon type it needs, and selecting one sets both — because account and logon type are a single
+decision, and a gMSA left on `S4U` produces a task that cannot register. On a machine with no
+reachable DC the picker still lists the built-ins, so it is never a dead end.
+
+The list also tells you what each choice costs: a user account whose password expires is
+labelled as such, a disabled account is shown in red and cannot be selected, and a gMSA this
+host cannot yet read is called out.
+
+### Creating a gMSA
+
+A side utility, reachable from the picker. gMSA setup is three steps in two places and the
+process explains itself nowhere, so the dialog says what it is doing and why:
+
+1. Create the account, naming who may read its password — **a group**, not individual
+   computers, or every new host means editing the gMSA.
+2. Each host caches it (`Install-ADServiceAccount`).
+3. Each host grants it **Log on as a batch job**, or registration fails with `0x80070534`.
+
+A checkbox does 2 and 3 for the local machine. If the host can't read the password yet, that is
+reported as a **next step, not a failure** — the usual cause is a group membership that needs a
+reboot to land in the machine's Kerberos ticket, and the task can be built in the meantime.
+
+Everything runs on your own Windows credentials. The tool holds none, so it simply succeeds or
+fails on your rights.
+
+**It deliberately won't run `Add-KdsRootKey`.** That key is a single forest-wide secret the DCs
+use to *compute* gMSA passwords; you need it only if nobody has ever made a gMSA in the forest,
+and if one exists you never think about it again. Creating it is one Enterprise Admin command —
+but it becomes usable only after ~10 hours of replication, so a button that appears to succeed
+and then does nothing all day is worse than no button. The prerequisite check explains it and
+shows the command.
 
 ## Defaults that differ from Task Scheduler's
 
