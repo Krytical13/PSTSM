@@ -183,17 +183,81 @@ function Show-PSTaskEditor {
     # --- principal ------------------------------------------------------------------
     $secWho = New-PSTaskUISection -Title 'Run as'
     $tblWho = New-PSTaskUIFieldTable
-    $cboLogon = New-Object System.Windows.Forms.ComboBox
-    $cboLogon.Dock = 'Fill'; $cboLogon.DropDownStyle = 'DropDownList'
-    $logonChoices = [ordered]@{
-        'S4U'            = 'Whether logged on or not, no password stored (S4U)'
-        'gMSA'           = 'Group managed service account (directory holds the password)'
-        'Password'       = 'Whether logged on or not, with stored password'
-        'Interactive'    = 'Only while this user is logged on'
-        'ServiceAccount' = 'SYSTEM / LOCAL SERVICE / NETWORK SERVICE'
-        'Group'          = 'A group'
+    # Two controls, not one. A single list mixed up two orthogonal questions - WHAT KIND of
+    # account ("gMSA", "SYSTEM", "a group") and WHEN it runs ("only while logged on") - so
+    # half the entries did not answer the label above them.
+    #
+    #   Account type  ->  what you are running as
+    #   When          ->  logged-on requirement and how the password is handled
+    #
+    # 'When' is only a real choice for an ordinary user account. For the other three the answer
+    # is fixed by the account type, so the combo shows that single answer and greys out rather
+    # than hiding, which would leave the question silently unanswered.
+    $cboAccountType = New-Object System.Windows.Forms.ComboBox
+    $cboAccountType.Dock = 'Fill'; $cboAccountType.DropDownStyle = 'DropDownList'
+    $accountTypes = [ordered]@{
+        'User'    = 'User or service account'
+        'gMSA'    = 'Group managed service account (gMSA)'
+        'BuiltIn' = 'Built-in service account (SYSTEM, LOCAL/NETWORK SERVICE)'
+        'Group'   = 'Group'
     }
-    foreach ($k in $logonChoices.Keys) { [void]$cboLogon.Items.Add($logonChoices[$k]) }
+    foreach ($k in $accountTypes.Keys) { [void]$cboAccountType.Items.Add($accountTypes[$k]) }
+
+    $cboWhen = New-Object System.Windows.Forms.ComboBox
+    $cboWhen.Dock = 'Fill'; $cboWhen.DropDownStyle = 'DropDownList'
+
+    # Only the User row is selectable; the rest are the fixed consequence of the account type.
+    $whenChoicesForUser = [ordered]@{
+        'S4U'         = 'Whether logged on or not - no password stored (S4U)'
+        'Password'    = 'Whether logged on or not - using a stored password'
+        'Interactive' = 'Only while this user is logged on'
+    }
+    $whenFixed = [ordered]@{
+        'gMSA'    = 'Whether logged on or not - Active Directory supplies the password'
+        'BuiltIn' = 'Whether logged on or not - no password needed'
+        'Group'   = 'Runs for members of the group'
+    }
+
+    # The plan still speaks a single LogonType, so the pair collapses back to one on the way out
+    # and splits apart on the way in.
+    $getLogonType = {
+        $typeKeys = @($accountTypes.Keys)
+        $type = if ($cboAccountType.SelectedIndex -ge 0) { $typeKeys[$cboAccountType.SelectedIndex] } else { 'User' }
+        switch ($type) {
+            'gMSA' { 'gMSA' }
+            'BuiltIn' { 'ServiceAccount' }
+            'Group' { 'Group' }
+            default {
+                $whenKeys = @($whenChoicesForUser.Keys)
+                if ($cboWhen.SelectedIndex -ge 0 -and $cboWhen.SelectedIndex -lt $whenKeys.Count) { $whenKeys[$cboWhen.SelectedIndex] }
+                else { 'S4U' }
+            }
+        }
+    }
+
+    $applyAccountType = {
+        $typeKeys = @($accountTypes.Keys)
+        if ($cboAccountType.SelectedIndex -lt 0) { return }
+        $type = $typeKeys[$cboAccountType.SelectedIndex]
+
+        $previous = if ($cboWhen.SelectedIndex -ge 0) { [string]$cboWhen.SelectedItem } else { $null }
+        $cboWhen.Items.Clear()
+
+        if ($type -eq 'User') {
+            foreach ($k in $whenChoicesForUser.Keys) { [void]$cboWhen.Items.Add($whenChoicesForUser[$k]) }
+            $cboWhen.Enabled = $true
+            # ObjectCollection.IndexOf throws on $null, which is exactly what $previous is the
+            # first time through - so only try to restore when there is something to restore.
+            $restored = -1
+            if ($null -ne $previous) { $restored = $cboWhen.Items.IndexOf($previous) }
+            $cboWhen.SelectedIndex = $(if ($restored -ge 0) { $restored } else { 0 })
+        }
+        else {
+            [void]$cboWhen.Items.Add($whenFixed[$type])
+            $cboWhen.SelectedIndex = 0
+            $cboWhen.Enabled = $false
+        }
+    }
     $txtUser = New-PSTaskUITextBox
     $chkHighest = New-Object System.Windows.Forms.CheckBox
     $chkHighest.Text = 'Run with highest privileges'
@@ -210,8 +274,9 @@ function Show-PSTaskEditor {
     $acctRow.Controls.Add($txtUser, 0, 0)
     $acctRow.Controls.Add($btnPickAccount, 1, 0)
 
-    Add-PSTaskUIField -Table $tblWho -Label 'When' -Control $cboLogon
+    Add-PSTaskUIField -Table $tblWho -Label 'Account type' -Control $cboAccountType
     Add-PSTaskUIField -Table $tblWho -Label 'Account' -Control $acctRow
+    Add-PSTaskUIField -Table $tblWho -Label 'When' -Control $cboWhen
     Add-PSTaskUIField -Table $tblWho -Label '' -Control $chkHighest
     Add-PSTaskUIStacked -Stack $secWho.Content -Control $tblWho
     Add-PSTaskUIStacked -Stack $leftStack -Control $secWho.Container
@@ -364,9 +429,7 @@ function Show-PSTaskEditor {
             $engineChoice = $engines[$cboEngine.SelectedIndex]
         }
 
-        $logonKeys = @($logonChoices.Keys)
-        $logonType = 'S4U'
-        if ($cboLogon.SelectedIndex -ge 0) { $logonType = $logonKeys[$cboLogon.SelectedIndex] }
+        $logonType = & $getLogonType
 
         $settings = @{
             MultipleInstances          = [string]$cboInstances.SelectedItem
@@ -754,7 +817,9 @@ function Show-PSTaskEditor {
             $txtRestartCount, $txtRestartInterval, $txtLogDir, $txtLogRetain, $txtExtraArgs)) {
         $c.add_TextChanged({ & $refresh })
     }
-    foreach ($c in @($cboEngine, $cboLogon, $cboInstances, $cboLogging, $cboExecPolicy, $cboWindowStyle)) {
+    # $cboAccountType is deliberately absent: it has its own handler that re-populates $cboWhen
+    # before refreshing, and adding a second handler here would refresh against a stale pair.
+    foreach ($c in @($cboEngine, $cboWhen, $cboInstances, $cboLogging, $cboExecPolicy, $cboWindowStyle)) {
         $c.add_SelectedIndexChanged({ & $refresh })
     }
     foreach ($c in @($chkHighest, $chkStartWhenAvail, $chkBatteryStop, $chkNetwork, $chkWake,
@@ -851,36 +916,40 @@ function Show-PSTaskEditor {
     $form.CancelButton = $btnCancel
 
     # --- seed defaults ------------------------------------------------------------------
-    $cboLogon.SelectedIndex = 0
+    $cboAccountType.SelectedIndex = 0
+    & $applyAccountType
 
     # Show the account that will actually be used. New-PSTaskPlan falls back to the current user
     # when this is blank, so leaving the box empty made the form disagree with its own preview -
     # the preview named an account the form did not show.
     $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
 
-    # SYSTEM / LOCAL SERVICE / NETWORK SERVICE are the only meaningful accounts for a
-    # ServiceAccount principal, so offer SYSTEM when that is picked - but never overwrite an
-    # account the operator typed themselves.
-    $cboLogon.add_SelectedIndexChanged({
-            $keys = @($logonChoices.Keys)
-            if ($cboLogon.SelectedIndex -lt 0) { return }
-            $chosen = $keys[$cboLogon.SelectedIndex]
-            if ($chosen -eq 'ServiceAccount' -and $txtUser.Text -eq "$env:USERDOMAIN\$env:USERNAME") {
+    $cboAccountType.add_SelectedIndexChanged({
+            & $applyAccountType
+
+            # SYSTEM is the only sensible default for a built-in principal, so offer it - but
+            # never overwrite an account the operator typed themselves.
+            $typeKeys = @($accountTypes.Keys)
+            if ($cboAccountType.SelectedIndex -lt 0) { return }
+            $type = $typeKeys[$cboAccountType.SelectedIndex]
+            if ($type -eq 'BuiltIn' -and $txtUser.Text -eq "$env:USERDOMAIN\$env:USERNAME") {
                 $txtUser.Text = 'SYSTEM'
             }
-            elseif ($chosen -ne 'ServiceAccount' -and $txtUser.Text -eq 'SYSTEM') {
+            elseif ($type -ne 'BuiltIn' -and $txtUser.Text -eq 'SYSTEM') {
                 $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
             }
+            & $refresh
         })
 
     $btnPickAccount.add_Click({
             # Open the picker on the tab matching the current choice, so someone who already
             # selected gMSA is not shown every user in the domain.
-            $keys = @($logonChoices.Keys)
-            $chosen = if ($cboLogon.SelectedIndex -ge 0) { $keys[$cboLogon.SelectedIndex] } else { 'All' }
-            $initial = switch ($chosen) {
+            $typeKeys = @($accountTypes.Keys)
+            $current = if ($cboAccountType.SelectedIndex -ge 0) { $typeKeys[$cboAccountType.SelectedIndex] } else { 'All' }
+            $initial = switch ($current) {
                 'gMSA' { 'gMSA' }
-                'ServiceAccount' { 'BuiltIn' }
+                'BuiltIn' { 'BuiltIn' }
+                'User' { 'User' }
                 default { 'All' }
             }
 
@@ -889,10 +958,22 @@ function Show-PSTaskEditor {
 
             $txtUser.Text = $picked.Name
 
-            # Set the logon type to match. Picking a gMSA and leaving the type on S4U produces a
-            # task that cannot register, so the two move together.
-            $idx = [array]::IndexOf($keys, $picked.SuggestedLogonType)
-            if ($idx -ge 0) { $cboLogon.SelectedIndex = $idx }
+            # Move both controls together. Picking a gMSA and leaving the type on User/S4U
+            # produces a task that cannot register.
+            $newType = switch ($picked.SuggestedLogonType) {
+                'gMSA' { 'gMSA' }
+                'ServiceAccount' { 'BuiltIn' }
+                'Group' { 'Group' }
+                default { 'User' }
+            }
+            $ti = [array]::IndexOf($typeKeys, $newType)
+            if ($ti -ge 0) { $cboAccountType.SelectedIndex = $ti }
+            & $applyAccountType
+
+            if ($newType -eq 'User') {
+                $wi = [array]::IndexOf(@($whenChoicesForUser.Keys), $picked.SuggestedLogonType)
+                if ($wi -ge 0) { $cboWhen.SelectedIndex = $wi }
+            }
             & $refresh
         })
 
@@ -916,9 +997,22 @@ function Show-PSTaskEditor {
         $txtUser.Text = [string]$Plan.Principal.UserId
         $txtExtraArgs.Text = [string]$Plan.ExtraArguments
 
-        $keys = @($logonChoices.Keys)
-        $li = [array]::IndexOf($keys, [string]$Plan.Principal.LogonType)
-        if ($li -ge 0) { $cboLogon.SelectedIndex = $li }
+        # Split the plan's single LogonType back into the account-type / when pair.
+        $existingLogon = [string]$Plan.Principal.LogonType
+        $existingType = switch ($existingLogon) {
+            'gMSA' { 'gMSA' }
+            'ServiceAccount' { 'BuiltIn' }
+            'Group' { 'Group' }
+            default { 'User' }
+        }
+        $ti = [array]::IndexOf(@($accountTypes.Keys), $existingType)
+        if ($ti -ge 0) { $cboAccountType.SelectedIndex = $ti }
+        & $applyAccountType
+        if ($existingType -eq 'User') {
+            $wi = [array]::IndexOf(@($whenChoicesForUser.Keys), $existingLogon)
+            if ($wi -ge 0) { $cboWhen.SelectedIndex = $wi }
+        }
+
         $chkHighest.Checked = ($Plan.Principal.RunLevel -eq 'Highest')
 
         $s = $Plan.Settings

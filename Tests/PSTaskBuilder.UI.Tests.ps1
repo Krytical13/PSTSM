@@ -211,6 +211,77 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             $preview[0].Text | Should -BeLike "*$env:USERDOMAIN\$env:USERNAME*"
         }
 
+        It 'separates account TYPE from WHEN it runs' {
+            # Regression. One combo labelled "When" used to list 'gMSA', 'SYSTEM / LOCAL
+            # SERVICE...' and 'A group' - none of which answer "when". They are account types.
+            $combos = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.ComboBox] })
+
+            $typeCombo = @($combos | Where-Object { @($_.Items) -contains 'Group managed service account (gMSA)' })
+            $typeCombo.Count | Should -Be 1
+
+            $whenCombo = @($combos | Where-Object {
+                    @($_.Items) -contains 'Only while this user is logged on'
+                })
+            $whenCombo.Count | Should -Be 1
+
+            # Every entry under "When" must actually be about when / how it authenticates.
+            foreach ($item in @($whenCombo[0].Items)) {
+                $item | Should -Match '(?i)logged on|password|members of the group'
+            }
+            # ...and no account-type answers may leak back into it.
+            @($whenCombo[0].Items) | Should -Not -Contain 'Group managed service account (gMSA)'
+            @($whenCombo[0].Items) | Should -Not -Contain 'Built-in service account (SYSTEM, LOCAL/NETWORK SERVICE)'
+        }
+
+        It 'offers a real "When" choice for a user account' {
+            $combos = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.ComboBox] })
+            $whenCombo = @($combos | Where-Object { @($_.Items) -contains 'Only while this user is logged on' })[0]
+            $whenCombo.Enabled | Should -BeTrue
+            @($whenCombo.Items).Count | Should -Be 3
+        }
+
+        It 'fixes and greys out "When" for a gMSA, rather than leaving it blank' {
+            # Driven by seeding a gMSA plan rather than by changing the combo: a -BuildOnly form
+            # has outlived its building function, so poking a control fires a handler whose
+            # captured scriptblocks no longer resolve. Seeding exercises the real path anyway.
+            $plan = New-PSTaskPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
+            $f = Show-PSTaskEditor -Plan $plan -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                $combos = @(Get-AllControl -Root $f | Where-Object { $_ -is [System.Windows.Forms.ComboBox] })
+
+                $typeCombo = @($combos | Where-Object { @($_.Items) -contains 'Group managed service account (gMSA)' })[0]
+                $typeCombo.SelectedItem | Should -Be 'Group managed service account (gMSA)'
+
+                # One fixed answer, shown but not editable - never empty, which would leave the
+                # question silently unanswered.
+                $whenCombo = @($combos | Where-Object {
+                        @($_.Items).Count -eq 1 -and "$($_.Items[0])" -like '*Active Directory supplies the password*'
+                    })
+                $whenCombo.Count | Should -Be 1
+                $whenCombo[0].Enabled | Should -BeFalse
+            }
+            finally { $f.Dispose() }
+        }
+
+        It 'round-trips a gMSA plan back to the same logon type' {
+            # The pair must collapse to exactly what it was split from, or editing a gMSA task
+            # and pressing save would silently change its principal.
+            $plan = New-PSTaskPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
+            $f = Show-PSTaskEditor -Plan $plan -BuildOnly
+            try {
+                Initialize-FormLayout -Form $f
+                $preview = @(Get-AllControl -Root $f | Where-Object {
+                        $_ -is [System.Windows.Forms.TextBox] -and $_.ReadOnly -and $_.Multiline -and $_.Text -like '*Run as*'
+                    })
+                # -Match, not -BeLike: '[' opens a character class in a wildcard pattern, and
+                # the preview renders the principal as "[gMSA / Limited]".
+                $preview[0].Text | Should -Match 'gMSA / '
+                $preview[0].Text | Should -Match ([regex]::Escape('CONTOSO\svc_x$'))
+            }
+            finally { $f.Dispose() }
+        }
+
         It 'shows the derived command in the preview' {
             $previews = @($script:allB | Where-Object {
                     $_ -is [System.Windows.Forms.TextBox] -and $_.ReadOnly -and $_.Multiline -and $_.Text -like '*Arguments*'
