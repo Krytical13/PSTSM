@@ -150,12 +150,25 @@ function Test-PSTaskPlan {
     $networkish = @($ScriptProfile.Signals.NetworkCommands) + @($ScriptProfile.Signals.UncPaths)
 
     if ($logonType -eq 'S4U' -and $networkish.Count -gt 0) {
-        Add-PSTaskCheck 'S4U_NETWORK' 'Warning' 'S4U logon has no network credentials' `
-            ("Script reaches the network: " + (($networkish | Select-Object -First 6) -join ', ')) `
-            "This is the single most common cause of 'works when I run it, fails on the schedule'. Use a stored password, a gMSA, or SYSTEM if machine-account access is enough."
+        Add-PSTaskCheck 'S4U_NETWORK' 'Warning' 'S4U cannot authenticate to other machines' `
+            ("Connectivity itself is fine - sockets, DNS and plain HTTPS all work. What fails is anything " +
+            "authenticating AS THIS USER, because an S4U token carries no credentials and presents as ANONYMOUS. " +
+            "Found: " + (($networkish | Select-Object -First 6) -join ', ')) `
+            ("This is the most common cause of 'works when I run it, fails on the schedule'. Note S4U does NOT fall back to the machine account - " +
+            "SYSTEM and NETWORK SERVICE are the ones that authenticate as DOMAIN\COMPUTER`$, which is why SYSTEM is a real alternative here. " +
+            'Otherwise use a gMSA, or a stored password.')
     }
     elseif ($logonType -eq 'S4U') {
-        Add-PSTaskCheck 'S4U_OK' 'Ok' 'S4U logon is appropriate' 'No outbound network calls detected.' $null
+        Add-PSTaskCheck 'S4U_OK' 'Ok' 'S4U logon is appropriate' 'Nothing that authenticates to another machine was detected.' $null
+    }
+
+    if ($logonType -eq 'S4U' -and $ScriptProfile.Signals.DpapiCommands.Count -gt 0) {
+        Add-PSTaskCheck 'S4U_DPAPI' 'Warning' 'S4U cannot decrypt DPAPI-protected secrets' `
+            ("The user's DPAPI master key is unlocked from their password, and an S4U logon has none - this is the " +
+            "'or encrypted files' half of Microsoft's S4U note. Found: " + ($ScriptProfile.Signals.DpapiCommands -join ', ')) `
+            ('The secret decrypts by hand and fails on the schedule. Use a stored password, a gMSA (no secret to store), ' +
+            'or machine-scoped protection the task account can actually open. A helper function wrapping these calls will not be detected, ' +
+            'so check any credential-loading code of your own.')
     }
 
     if ($logonType -in @('S4U', 'Password')) {

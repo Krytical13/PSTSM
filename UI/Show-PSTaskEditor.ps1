@@ -839,6 +839,27 @@ function Show-PSTaskEditor {
 
     # --- seed defaults ------------------------------------------------------------------
     $cboLogon.SelectedIndex = 0
+
+    # Show the account that will actually be used. New-PSTaskPlan falls back to the current user
+    # when this is blank, so leaving the box empty made the form disagree with its own preview -
+    # the preview named an account the form did not show.
+    $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
+
+    # SYSTEM / LOCAL SERVICE / NETWORK SERVICE are the only meaningful accounts for a
+    # ServiceAccount principal, so offer SYSTEM when that is picked - but never overwrite an
+    # account the operator typed themselves.
+    $cboLogon.add_SelectedIndexChanged({
+            $keys = @($logonChoices.Keys)
+            if ($cboLogon.SelectedIndex -lt 0) { return }
+            $chosen = $keys[$cboLogon.SelectedIndex]
+            if ($chosen -eq 'ServiceAccount' -and $txtUser.Text -eq "$env:USERDOMAIN\$env:USERNAME") {
+                $txtUser.Text = 'SYSTEM'
+            }
+            elseif ($chosen -ne 'ServiceAccount' -and $txtUser.Text -eq 'SYSTEM') {
+                $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
+            }
+        })
+
     $cboInstances.SelectedItem = 'IgnoreNew'
     $cboLogging.SelectedIndex = 0
     $cboExecPolicy.SelectedItem = 'Bypass'

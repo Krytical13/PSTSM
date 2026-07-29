@@ -95,8 +95,8 @@ consumes.
 Every check answers one question: *this works in my console — will it still work when Task
 Scheduler runs it?* `Error` blocks registration, `Warning` is a real risk to acknowledge.
 
-- `S4U_NETWORK` — S4U holds **no network credentials**. Raised only when the script actually
-  reaches the network. This is the single most common "works by hand, fails on the schedule".
+- `S4U_NETWORK` / `S4U_DPAPI` — see below. The most common "works by hand, fails on the
+  schedule", raised only when the script actually does the thing that breaks.
 - `MODULE_USERSCOPE` — module installed only under your profile; SYSTEM/gMSA will not see it.
 - `INTERACTIVE` / `GUI` — `Read-Host`, `Get-Credential`, WinForms: nobody is there to answer.
 - `EXIT_CODE` — no `exit`/`throw`, so Last Run Result reads `0x0` even when the script failed.
@@ -104,6 +104,37 @@ Scheduler runs it?* `Error` blocks registration, `Warning` is a real risk to ack
 - `ENGINE_VERSION` / `ENGINE_EDITION`, `ELEVATION`, `PARAM_MANDATORY`, `PARAM_UNKNOWN`,
   `PARAM_CREDENTIAL`, `WORKDIR`, `SCRIPT_IN_PROFILE`, `SCRIPT_ON_UNC`, `NO_TRIGGERS`,
   `BATCH_RIGHT`, `PASSWORD_ROTATION`, `TASK_EXISTS`.
+
+## What S4U actually costs you
+
+"Run whether user is logged on or not" + "Do not store password" is an **S4U** logon: Task
+Scheduler uses Kerberos S4U2Self to mint a token for the account without its password. Microsoft
+summarises the consequence as *"no password is stored by the system and there is no access to
+either the network or encrypted files"* — which is blunter than what happens in practice, and
+worth stating precisely because it drives two of the checks:
+
+| | Under S4U |
+|---|---|
+| Sockets, DNS, outbound HTTPS to a public endpoint | **Works** — connectivity is not gated by the token |
+| A REST call authenticated by a bearer/OAuth token | **Works** — app-layer auth, not Windows auth |
+| `\\server\share`, LDAP/`Get-AD*`, WinRM, SQL Integrated Security, `-UseDefaultCredentials` | **Fails** |
+| Identity presented to those services | **ANONYMOUS** |
+| DPAPI user-scope secrets (`ConvertTo-SecureString` on a stored blob, `Import-Clixml` credentials) | **Fails to decrypt** |
+
+Two things people get wrong:
+
+- **It is not "no internet".** Connectivity is fine; *authentication as that user* is what is
+  missing.
+- **It does not fall back to the machine account.** `DOMAIN\COMPUTER$` is what **SYSTEM** and
+  **NETWORK SERVICE** present on the network, and that is a real identity that can authenticate.
+  S4U has none. That is precisely why SYSTEM is a genuine alternative rather than a sideways
+  move — and why a gMSA is usually the right answer when the script needs to be *itself* on the
+  network.
+
+The DPAPI case is the non-obvious one: the master key is unlocked from the account's password,
+so a secret that decrypts perfectly when you run the script by hand fails on the schedule. The
+check matches the unambiguous primitives only (keyless `ConvertTo-`/`ConvertFrom-SecureString`,
+`ProtectedData`); a helper of your own that wraps them will not be spotted.
 
 ## Defaults that differ from Task Scheduler's
 

@@ -255,6 +255,31 @@ function Get-PSTaskScriptProfile {
     }
     catch { Write-Verbose "Could not scan string literals for UNC paths: $($_.Exception.Message)" }
 
+    # DPAPI usage. An S4U logon has no password, so the user's DPAPI master key cannot be
+    # unlocked - which is the "or encrypted files" half of Microsoft's S4U note. A secret
+    # protected this way decrypts fine when you run the script by hand and fails on the
+    # schedule. Only the unambiguous primitives are matched: ConvertTo-/ConvertFrom-SecureString
+    # WITHOUT an explicit -Key/-SecureKey (with a key it is AES, not DPAPI, and survives), and
+    # the ProtectedData API. A helper that wraps these will not be spotted.
+    $dpapiCommands = @()
+    try {
+        $secureStringAsts = $ast.FindAll({
+                param($n)
+                $n -is [System.Management.Automation.Language.CommandAst] -and
+                $n.GetCommandName() -match '(?i)^(ConvertTo-SecureString|ConvertFrom-SecureString)$'
+            }, $true)
+        foreach ($c in $secureStringAsts) {
+            $text = $c.Extent.Text
+            if ($text -match '(?i)-Key\b|-SecureKey\b|-AsPlainText\b') { continue }
+            $dpapiCommands += $c.GetCommandName()
+        }
+        if ($ast.Extent.Text -match 'System\.Security\.Cryptography\.ProtectedData') {
+            $dpapiCommands += 'ProtectedData'
+        }
+    }
+    catch { Write-Verbose "Could not scan for DPAPI usage: $($_.Exception.Message)" }
+    $dpapiCommands = @($dpapiCommands | Select-Object -Unique)
+
     $hasExit = $false
     try {
         $hasExit = [bool]$ast.Find({ $args[0] -is [System.Management.Automation.Language.ExitStatementAst] }, $true)
@@ -319,6 +344,7 @@ function Get-PSTaskScriptProfile {
             InteractiveCommands = $interactive
             NetworkCommands     = $network
             UncPaths            = $uncPaths
+            DpapiCommands       = $dpapiCommands
             HasExitStatement    = $hasExit
             UsesGui             = $usesGui
             CommandNames        = $commandNames

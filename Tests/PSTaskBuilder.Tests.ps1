@@ -419,11 +419,52 @@ Describe 'Test-PSTaskPlan' {
         $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
         @($r | Where-Object Id -eq 'PARAM_UNKNOWN') | Should -HaveCount 0
     }
-    It 'warns that S4U cannot reach the network the script uses' {
+    It 'warns that S4U cannot authenticate to the machines the script talks to' {
         $r = Test-PSTaskPlan -Plan $script:basePlan -SkipExistingTaskCheck
         $c = $r | Where-Object Id -eq 'S4U_NETWORK'
         $c.Severity | Should -Be 'Warning'
         $c.Detail | Should -BeLike '*Get-ADUser*'
+        # The wording must not imply the network is unreachable - it is authentication that
+        # fails, and S4U presents as ANONYMOUS rather than falling back to the machine account.
+        $c.Detail | Should -BeLike '*ANONYMOUS*'
+        $c.Recommendation | Should -BeLike '*does NOT fall back to the machine account*'
+    }
+
+    It 'warns that S4U cannot decrypt DPAPI-protected secrets' {
+        # The non-obvious half of Microsoft's "no access to either the network or encrypted
+        # files": the DPAPI master key is unlocked from the password S4U does not have.
+        $dpapi = Join-Path $TestDrive 'Uses-Dpapi.ps1'
+        @'
+param([string]$CredentialPath = 'C:\secrets\api.dat')
+$secure = Get-Content -LiteralPath $CredentialPath | ConvertTo-SecureString
+exit 0
+'@ | Set-Content -LiteralPath $dpapi -Encoding UTF8
+
+        $plan = New-PSTaskPlan -ScriptPath $dpapi
+        $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
+        ($r | Where-Object Id -eq 'S4U_DPAPI').Severity | Should -Be 'Warning'
+    }
+
+    It 'does not flag an explicitly keyed SecureString as DPAPI' {
+        # -Key means AES, which survives an S4U logon; only the keyless form is DPAPI.
+        $aes = Join-Path $TestDrive 'Uses-Aes.ps1'
+        @'
+param([byte[]]$Key)
+$secure = 'x' | ConvertTo-SecureString -AsPlainText -Force
+$blob = $secure | ConvertFrom-SecureString -Key $Key
+exit 0
+'@ | Set-Content -LiteralPath $aes -Encoding UTF8
+
+        (Get-PSTaskScriptProfile -Path $aes).Signals.DpapiCommands | Should -BeNullOrEmpty
+        $r = Test-PSTaskPlan -Plan (New-PSTaskPlan -ScriptPath $aes) -SkipExistingTaskCheck
+        @($r | Where-Object Id -eq 'S4U_DPAPI') | Should -HaveCount 0
+    }
+
+    It 'does not raise the DPAPI warning for a logon type that has credentials' {
+        $dpapi = Join-Path $TestDrive 'Uses-Dpapi.ps1'
+        $plan = New-PSTaskPlan -ScriptPath $dpapi -LogonType 'Password' -UserId 'CONTOSO\svc_x'
+        $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
+        @($r | Where-Object Id -eq 'S4U_DPAPI') | Should -HaveCount 0
     }
     It 'does not raise the S4U warning for a script that stays local' {
         $plan = New-PSTaskPlan -ScriptPath $script:QuietScript

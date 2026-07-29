@@ -199,6 +199,18 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             $combos[0].SelectedItem | Should -Be 'Normal'                          # Priority default
         }
 
+        It 'pre-fills the run-as account so the form agrees with the preview' {
+            # Regression. New-PSTaskPlan falls back to the current user when the box is blank,
+            # so the preview named an account the form left empty.
+            $boxes = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.TextBox] -and -not $_.ReadOnly })
+            @($boxes | ForEach-Object { $_.Text }) | Should -Contain "$env:USERDOMAIN\$env:USERNAME"
+
+            $preview = @($script:allB | Where-Object {
+                    $_ -is [System.Windows.Forms.TextBox] -and $_.ReadOnly -and $_.Multiline -and $_.Text -like '*Run as*'
+                })
+            $preview[0].Text | Should -BeLike "*$env:USERDOMAIN\$env:USERNAME*"
+        }
+
         It 'shows the derived command in the preview' {
             $previews = @($script:allB | Where-Object {
                     $_ -is [System.Windows.Forms.TextBox] -and $_.ReadOnly -and $_.Multiline -and $_.Text -like '*Arguments*'
