@@ -49,7 +49,7 @@ function Register-PSTaskPlan {
     }
 
     if ($Plan.Principal.LogonType -eq 'Password' -and -not $Password) {
-        throw "Principal.LogonType is 'Password' but no -Password was supplied."
+        throw "Principal.LogonType is 'Password' but no -Password was supplied. For a group managed service account use LogonType 'gMSA', which needs none."
     }
 
     # --- action ------------------------------------------------------------------------
@@ -81,7 +81,13 @@ function Register-PSTaskPlan {
     }
 
     # --- principal ---------------------------------------------------------------------
-    $principalParams = @{ LogonType = $Plan.Principal.LogonType }
+    # A gMSA is registered as LogonType Password with NO password: Task Scheduler retrieves the
+    # managed password from the directory itself. There is no gMSA-specific value in
+    # TASK_LOGON_TYPE, which is why the plan models it separately and collapses it here.
+    $effectiveLogonType = $Plan.Principal.LogonType
+    if ($effectiveLogonType -eq 'gMSA') { $effectiveLogonType = 'Password' }
+
+    $principalParams = @{ LogonType = $effectiveLogonType }
     if ($Plan.Principal.LogonType -eq 'Group') {
         $principalParams['GroupId'] = $Plan.Principal.UserId
     }

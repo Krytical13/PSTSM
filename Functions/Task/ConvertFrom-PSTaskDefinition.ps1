@@ -133,7 +133,15 @@ function ConvertFrom-PSTaskDefinition {
 
             Principal         = [ordered]@{
                 UserId    = $Task.Principal.UserId
-                LogonType = [string]$Task.Principal.LogonType
+                # A gMSA is stored as LogonType Password, so the registered task cannot say
+                # which it is. An account name ending in '$' is the sAMAccountName convention
+                # for a managed service account, and a normal user cannot have one, so this is
+                # a safe reading - and it matters, because re-saving as 'Password' would demand
+                # a password the account does not have.
+                LogonType = $(
+                    if ([string]$Task.Principal.LogonType -eq 'Password' -and $Task.Principal.UserId -match '\$$') { 'gMSA' }
+                    else { [string]$Task.Principal.LogonType }
+                )
                 RunLevel  = [string]$Task.Principal.RunLevel
             }
 

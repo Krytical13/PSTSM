@@ -187,6 +187,7 @@ function Show-PSTaskEditor {
     $cboLogon.Dock = 'Fill'; $cboLogon.DropDownStyle = 'DropDownList'
     $logonChoices = [ordered]@{
         'S4U'            = 'Whether logged on or not, no password stored (S4U)'
+        'gMSA'           = 'Group managed service account (directory holds the password)'
         'Password'       = 'Whether logged on or not, with stored password'
         'Interactive'    = 'Only while this user is logged on'
         'ServiceAccount' = 'SYSTEM / LOCAL SERVICE / NETWORK SERVICE'

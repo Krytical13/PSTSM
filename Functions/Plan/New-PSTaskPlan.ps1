@@ -49,8 +49,12 @@ function New-PSTaskPlan {
     .PARAMETER UserId
         Account to run as. Defaults to the current user.
     .PARAMETER LogonType
-        Interactive, S4U, Password, ServiceAccount (SYSTEM/LOCAL SERVICE/NETWORK SERVICE), or
-        Group. Default S4U.
+        Interactive, S4U, Password, gMSA, ServiceAccount (SYSTEM/LOCAL SERVICE/NETWORK SERVICE),
+        or Group. Default S4U.
+
+        gMSA registers as LogonType Password but supplies NO password - Task Scheduler retrieves
+        the managed one from the directory. It is modelled separately from Password precisely so
+        the "a password is required" rule does not apply to it.
     .PARAMETER RunLevel
         Limited or Highest. Defaults to Highest when the script has
         '#Requires -RunAsAdministrator', otherwise Limited.
@@ -91,7 +95,7 @@ function New-PSTaskPlan {
 
         [string]$UserId,
 
-        [ValidateSet('Interactive', 'S4U', 'Password', 'ServiceAccount', 'Group')]
+        [ValidateSet('Interactive', 'S4U', 'Password', 'gMSA', 'ServiceAccount', 'Group')]
         [string]$LogonType = 'S4U',
 
         [ValidateSet('Limited', 'Highest')]

@@ -171,10 +171,67 @@ function Test-PSTaskPlan {
             'so check any credential-loading code of your own.')
     }
 
-    if ($logonType -in @('S4U', 'Password')) {
+    if ($logonType -in @('S4U', 'Password', 'gMSA')) {
         Add-PSTaskCheck 'BATCH_RIGHT' 'Info' 'Account needs "Log on as a batch job"' `
             "$($Plan.Principal.UserId) must hold SeBatchLogonRight on this machine." `
-            'Usually granted already for admins; enforced by GPO in locked-down environments. Registration fails with 0x80070534 if it is missing.'
+            'Usually granted already for admins; enforced by GPO in locked-down environments. Registration fails with 0x80070534 if it is missing. A gMSA almost never has it by default - grant it explicitly.'
+    }
+
+    # --- gMSA ---------------------------------------------------------------------------
+    if ($logonType -eq 'gMSA') {
+        $gmsa = $Plan.Principal.UserId
+
+        if ($gmsa -notmatch '\$$') {
+            Add-PSTaskCheck 'GMSA_NAME' 'Warning' 'gMSA name does not end with $' `
+                "'$gmsa' looks like a normal account name." `
+                "A gMSA is referenced by its sAMAccountName, which ends in '$' - for example DOMAIN\svc_reports$."
+        }
+
+        $adAvailable = [bool](Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)
+        if (-not $adAvailable) {
+            Add-PSTaskCheck 'GMSA_NO_RSAT' 'Info' 'Cannot verify the gMSA from here' `
+                'The ActiveDirectory module is not installed, so the account and this host''s eligibility cannot be checked.' `
+                'Install RSAT AD PowerShell to have these checks run, or verify manually with Test-ADServiceAccount on the machine that will run the task.'
+        }
+        else {
+            $leaf = ($gmsa -split '\\')[-1]
+            $account = $null
+            try { $account = Get-ADServiceAccount -Identity ($leaf.TrimEnd('$')) -ErrorAction Stop }
+            catch { Write-Verbose "Get-ADServiceAccount failed for '$leaf': $($_.Exception.Message)" }
+
+            if (-not $account) {
+                Add-PSTaskCheck 'GMSA_MISSING' 'Error' 'gMSA not found in the directory' `
+                    "No managed service account matching '$leaf' could be read." `
+                    'Check the name, or create it first. Note gMSA names are unique per FOREST, not per domain.'
+            }
+            else {
+                # Test-ADServiceAccount answers the question that actually matters: can THIS
+                # machine retrieve the password? It needs elevation, and it stays false until
+                # the host has a Kerberos ticket reflecting its membership of whatever group is
+                # in PrincipalsAllowedToRetrieveManagedPassword - which in practice means a
+                # reboot after being added.
+                $usable = $null
+                try { $usable = Test-ADServiceAccount -Identity $leaf.TrimEnd('$') -ErrorAction Stop }
+                catch { Write-Verbose "Test-ADServiceAccount failed: $($_.Exception.Message)" }
+
+                if ($usable -eq $true) {
+                    Add-PSTaskCheck 'GMSA_OK' 'Ok' 'This machine can use the gMSA' "$gmsa is installed and retrievable here." $null
+                }
+                elseif ($usable -eq $false) {
+                    Add-PSTaskCheck 'GMSA_NOT_USABLE' 'Error' 'This machine cannot retrieve the gMSA password' `
+                        "Test-ADServiceAccount returned false for '$leaf'." `
+                        'Add this computer (ideally via a group) to the gMSA''s PrincipalsAllowedToRetrieveManagedPassword, then REBOOT so the host gets a Kerberos ticket carrying the new membership, then run Install-ADServiceAccount.'
+                }
+                else {
+                    Add-PSTaskCheck 'GMSA_UNVERIFIED' 'Info' 'gMSA exists but could not be tested here' `
+                        'Test-ADServiceAccount did not return a result - it requires an elevated session.' `
+                        'Re-run elevated on the machine that will host the task.'
+                }
+            }
+        }
+
+        Add-PSTaskCheck 'GMSA_NO_SECRET' 'Ok' 'No password to store or rotate' `
+            'The directory manages the password and the host retrieves it.' $null
     }
     if ($logonType -eq 'Password') {
         Add-PSTaskCheck 'PASSWORD_ROTATION' 'Info' 'Stored password will expire' `

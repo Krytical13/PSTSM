@@ -497,12 +497,52 @@ exit 0
         $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
         ($r | Where-Object Id -eq 'NO_TRIGGERS').Severity | Should -Be 'Warning'
     }
+    It 'treats a gMSA as needing no password and no rotation' {
+        # A gMSA registers as LogonType Password with NO password - Task Scheduler fetches the
+        # managed one. Modelling it as its own logon type is what stops the "a password is
+        # required" rule and the password-rotation warning from applying to it.
+        $plan = New-PSTaskPlan -ScriptPath $script:QuietScript -LogonType 'gMSA' -UserId 'CONTOSO\svc_reports$'
+        $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
+
+        ($r | Where-Object Id -eq 'GMSA_NO_SECRET').Severity | Should -Be 'Ok'
+        @($r | Where-Object Id -eq 'PASSWORD_ROTATION') | Should -HaveCount 0
+        @($r | Where-Object Id -eq 'S4U_NETWORK') | Should -HaveCount 0
+        ($r | Where-Object Id -eq 'BATCH_RIGHT').Recommendation | Should -BeLike '*gMSA almost never has it by default*'
+    }
+
+    It 'warns when a gMSA name does not end with $' {
+        $plan = New-PSTaskPlan -ScriptPath $script:QuietScript -LogonType 'gMSA' -UserId 'CONTOSO\svc_reports'
+        $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
+        ($r | Where-Object Id -eq 'GMSA_NAME').Severity | Should -Be 'Warning'
+    }
+
+    It 'does not warn about the name when the gMSA is correctly suffixed' {
+        $plan = New-PSTaskPlan -ScriptPath $script:QuietScript -LogonType 'gMSA' -UserId 'CONTOSO\svc_reports$'
+        $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
+        @($r | Where-Object Id -eq 'GMSA_NAME') | Should -HaveCount 0
+    }
+
     It 'reports a missing script as a hard error and stops' {
         $plan = New-PSTaskPlan -ScriptPath $script:QuietScript
         $plan.ScriptPath = Join-Path $TestDrive 'gone.ps1'
         $r = Test-PSTaskPlan -Plan $plan -SkipExistingTaskCheck
         $r | Should -HaveCount 1
         $r[0].Id | Should -Be 'SCRIPT_MISSING'
+    }
+}
+
+Describe 'Register-PSTaskPlan password handling' {
+    It 'refuses a Password principal with no password, and points at gMSA' {
+        $plan = New-PSTaskPlan -ScriptPath $script:QuietScript -LogonType 'Password' -UserId 'CONTOSO\svc_x'
+        { Register-PSTaskPlan -Plan $plan -Force -Confirm:$false -WhatIf } |
+            Should -Throw "*use LogonType 'gMSA'*"
+    }
+
+    It 'does not demand a password for a gMSA' {
+        # -WhatIf stops short of registering, so this exercises everything up to and including
+        # the password rule without touching Task Scheduler.
+        $plan = New-PSTaskPlan -ScriptPath $script:QuietScript -LogonType 'gMSA' -UserId 'CONTOSO\svc_reports$'
+        { Register-PSTaskPlan -Plan $plan -Force -Confirm:$false -WhatIf } | Should -Not -Throw
     }
 }
 

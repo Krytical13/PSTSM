@@ -136,6 +136,23 @@ so a secret that decrypts perfectly when you run the script by hand fails on the
 check matches the unambiguous primitives only (keyless `ConvertTo-`/`ConvertFrom-SecureString`,
 `ProtectedData`); a helper of your own that wraps them will not be spotted.
 
+### Running as a gMSA
+
+Pick the **gMSA** logon type. There is no gMSA value in `TASK_LOGON_TYPE`, so it registers as
+`Password` with **no password supplied** — Task Scheduler retrieves the managed one. It is
+modelled as its own logon type precisely so the "a password is required" rule and the
+password-rotation warning do not apply to it, and so a registered task whose account ends in
+`$` round-trips back as a gMSA rather than a `Password` principal nobody can save.
+
+The preflight checks what actually blocks it: that the account exists (gMSA names are unique
+per **forest**, not per domain), that `Test-ADServiceAccount` says *this* host can retrieve the
+password, and that the account has **Log on as a batch job** — which a gMSA almost never has by
+default. If `Test-ADServiceAccount` returns false, the usual cause is that the host was added to
+`PrincipalsAllowedToRetrieveManagedPassword` but has not rebooted, so its Kerberos ticket does
+not yet carry the new membership.
+
+The tool does not create gMSAs or the KDS root key.
+
 ## Defaults that differ from Task Scheduler's
 
 Task Scheduler's defaults are tuned for interactive desktop tasks. These are not:
