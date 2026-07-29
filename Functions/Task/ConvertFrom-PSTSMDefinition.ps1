@@ -47,17 +47,36 @@ function ConvertFrom-PSTSMDefinition {
             $Task = Get-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -ErrorAction Stop
         }
 
-        $action = @($Task.Actions)[0]
+        $realActions = @($Task.Actions | Where-Object { $null -ne $_ })
+        $action = if ($realActions.Count -gt 0) { $realActions[0] } else { $null }
         $notes = New-Object System.Collections.Generic.List[string]
 
-        if (@($Task.Actions).Count -gt 1) {
-            $notes.Add("Task has $(@($Task.Actions).Count) actions; only the first is modelled. Saving will drop the others.")
+        if ($realActions.Count -gt 1) {
+            $notes.Add("Task has $($realActions.Count) actions; only the first is modelled. Saving would drop the others.")
         }
 
-        $parsed = ConvertFrom-PSTSMAction -Execute $action.Execute `
-            -Arguments $action.Arguments `
-            -WorkingDirectory $action.WorkingDirectory
-        foreach ($n in $parsed.Notes) { $notes.Add($n) }
+        # Not every action runs a program. Roughly half the built-in Windows tasks use a
+        # ComHandler action, which has a ClassId instead of an Execute, so reading .Execute
+        # yields nothing and the "what does this run" answer has to come from elsewhere.
+        $actionClass = if ($action) { $action.CimClass.CimClassName } else { '<none>' }
+        $isExec = ($actionClass -eq 'MSFT_TaskExecAction')
+
+        if (-not $action) {
+            $notes.Add('Task has no actions at all, so there is nothing for it to run.')
+        }
+        elseif (-not $isExec) {
+            $comId = if ($action.PSObject.Properties['ClassId']) { $action.ClassId } else { $null }
+            $notes.Add("Action type is $actionClass, not a program to run$(if ($comId) { " (COM class $comId)" }). PSTSM models only executable actions, so this task is read-only here.")
+        }
+
+        $parsed = ConvertFrom-PSTSMAction `
+            -Execute ([string]$(if ($isExec) { $action.Execute })) `
+            -Arguments ([string]$(if ($isExec) { $action.Arguments })) `
+            -WorkingDirectory ([string]$(if ($isExec) { $action.WorkingDirectory }))
+        # Only for executable actions. For a COM handler the parser was handed an empty Execute
+        # and would add "Action runs '', which is not a PowerShell host" on top of the accurate
+        # explanation already recorded above - two notes for one fact, one of them nonsense.
+        if ($isExec) { foreach ($n in $parsed.Notes) { $notes.Add($n) } }
 
         # If the action points at a generated wrapper, resolve back to the real script so the
         # form shows the user's script, not our shim.
@@ -80,8 +99,12 @@ function ConvertFrom-PSTSMDefinition {
         }
 
         # --- triggers back to specs -----------------------------------------------------
+        # Where-Object, not a bare @(). A task with NO triggers has $Task.Triggers = $null, and
+        # @($null) is a ONE-element array containing $null - so the loop ran once with nothing
+        # and the mandatory -Trigger parameter refused to bind. That made every manual-only task
+        # impossible to open: 65 of the 288 tasks on a stock machine.
         $triggerSpecs = New-Object System.Collections.Generic.List[object]
-        foreach ($t in @($Task.Triggers)) {
+        foreach ($t in @($Task.Triggers | Where-Object { $null -ne $_ })) {
             $spec = ConvertFrom-PSTSMCimTrigger -Trigger $t
             if ($spec) { $triggerSpecs.Add($spec) }
             else { $notes.Add("Trigger type '$($t.CimClass.CimClassName)' is not editable here and will be preserved as-is only if you do not re-register.") }
@@ -160,12 +183,22 @@ function ConvertFrom-PSTSMDefinition {
                 DerivedFrom      = "$($Task.TaskPath)$($Task.TaskName)"
             }
 
-            # Round-trip safety
-            IsFullyRecognized = [bool]($parsed.IsRecognized -and @($Task.Actions).Count -eq 1)
+            # Round-trip safety. A single executable action that parses back to a .ps1 is the
+            # only shape that can be re-saved without rewriting somebody's working task.
+            IsFullyRecognized = [bool]($parsed.IsRecognized -and $isExec -and $realActions.Count -eq 1)
+            ActionType        = $actionClass
             RawAction         = [ordered]@{
-                Execute          = $action.Execute
-                Arguments        = $action.Arguments
-                WorkingDirectory = $action.WorkingDirectory
+                Execute          = [string]$(if ($isExec) { $action.Execute })
+                Arguments        = [string]$(if ($isExec) { $action.Arguments })
+                WorkingDirectory = [string]$(if ($isExec) { $action.WorkingDirectory })
+                # For a non-executable action there is no command line to show, so carry
+                # something that actually describes it instead of three empty strings.
+                Summary          = $(
+                    if (-not $action) { 'This task has no actions.' }
+                    elseif ($isExec) { (@([string]$action.Execute, [string]$action.Arguments) | Where-Object { $_ }) -join ' ' }
+                    elseif ($action.PSObject.Properties['ClassId'] -and $action.ClassId) { "$actionClass - COM class $($action.ClassId)" }
+                    else { $actionClass }
+                )
             }
             ParseNotes        = $notes.ToArray()
         }

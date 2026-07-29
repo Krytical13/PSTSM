@@ -681,6 +681,64 @@ exit 0
     }
 }
 
+Describe 'Editing existing tasks of every shape' {
+    # These run against whatever is registered on the machine. That is deliberate: the built-in
+    # \Microsoft\ tree is a free corpus of shapes nobody would think to synthesise - COM handler
+    # actions, trigger-less tasks, multi-action tasks - and it is what caught the bug below.
+    It 'converts every task registered on this machine without throwing' {
+        $tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue)
+        if ($tasks.Count -eq 0) { Set-ItResult -Skipped -Because 'this machine has no scheduled tasks'; return }
+
+        $failed = @()
+        foreach ($t in $tasks) {
+            try { $null = ConvertFrom-PSTSMDefinition -Task $t -ErrorAction Stop }
+            catch { $failed += "$($t.TaskPath)$($t.TaskName) [$(@($t.Actions)[0].CimClass.CimClassName)]: $($_.Exception.Message)" }
+        }
+        $failed | Should -BeNullOrEmpty
+    }
+
+    It 'opens a task that has no triggers' {
+        # Regression: @($null) is a ONE-element array containing $null, so a trigger-less task
+        # looped once with nothing and the mandatory -Trigger parameter refused to bind. That
+        # made 65 of 288 tasks on a stock machine impossible to open.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { -not $_.Triggers })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no trigger-less task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        @($plan.Triggers) | Should -HaveCount 0
+        $plan.TaskName | Should -Be $t.TaskName
+    }
+
+    It 'describes a non-executable action rather than showing an empty command' {
+        # Roughly half of Windows' own tasks use a ComHandler action, which has a ClassId and no
+        # Execute at all. Reading .Execute yields nothing, so the description has to come from
+        # the action type instead of three empty strings.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+                Where-Object { @($_.Actions)[0].CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction' })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no COM-handler task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.IsFullyRecognized | Should -BeFalse
+        $plan.ActionType | Should -Be 'MSFT_TaskComHandlerAction'
+        $plan.RawAction.Summary | Should -Not -BeNullOrEmpty
+        # ...and must not also claim it "runs ''", which is both redundant and untrue.
+        ($plan.ParseNotes -join ' ') | Should -Not -Match "runs ''"
+    }
+
+    It 'marks a non-PowerShell executable task read-only but still shows its command' {
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                $a = @($_.Actions)[0]
+                $a.CimClass.CimClassName -eq 'MSFT_TaskExecAction' -and $a.Execute -and $a.Execute -notmatch '(?i)powershell|pwsh'
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no non-PowerShell exec task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.IsFullyRecognized | Should -BeFalse      # never silently rewrite someone else's task
+        $plan.RawAction.Execute | Should -Not -BeNullOrEmpty
+        $plan.RawAction.Summary | Should -Match ([regex]::Escape((Split-Path $t.Actions[0].Execute -Leaf)))
+    }
+}
+
 Describe 'Register-PSTSMPlan password handling' {
     It 'refuses a Password principal with no password, and points at gMSA' {
         $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Password' -UserId 'CONTOSO\svc_x'

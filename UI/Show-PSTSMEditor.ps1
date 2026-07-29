@@ -1130,13 +1130,24 @@ function Show-PSTSMEditor {
     & $refreshTriggers
 
     if ($state.Locked) {
-        $txtPreview.Text = "This task's action was not built by PSTSM and cannot be modelled safely:" +
+        # Read-only view. Say what the task actually runs - for a COM handler there is no
+        # command line at all, so RawAction.Summary carries the description instead of three
+        # empty strings.
+        # RawAction is an ordered DICTIONARY, so PSObject.Properties[...] finds nothing on it -
+        # that guard silently failed and every COM-handler task reported "(nothing recorded)"
+        # even though the summary was sitting right there. Plain member access works.
+        $what = [string]$Plan.RawAction.Summary
+        if (-not $what) { $what = (@($Plan.RawAction.Execute, $Plan.RawAction.Arguments) | Where-Object { $_ }) -join ' ' }
+        if (-not $what) { $what = '(nothing recorded)' }
+
+        $txtPreview.Text = 'This task is shown read-only.' + [Environment]::NewLine + [Environment]::NewLine +
+        'It runs:' + [Environment]::NewLine +
+        "  $what" + [Environment]::NewLine + [Environment]::NewLine +
+        'Why it cannot be edited here:' + [Environment]::NewLine +
+        (@($Plan.ParseNotes) | ForEach-Object { "  - $_" }) -join [Environment]::NewLine +
         [Environment]::NewLine + [Environment]::NewLine +
-        "  $($Plan.RawAction.Execute) $($Plan.RawAction.Arguments)" +
-        [Environment]::NewLine + [Environment]::NewLine +
-        ($Plan.ParseNotes -join [Environment]::NewLine) +
-        [Environment]::NewLine + [Environment]::NewLine +
-        'Saving is blocked so a working task is not silently rewritten. Edit it in Task Scheduler, or create a new task alongside it.'
+        'PSTSM only rewrites actions it can model exactly, so it will not touch this one. Everything' + [Environment]::NewLine +
+        'above is read from the live task. Edit it in Task Scheduler, or build a new task alongside it.'
         $btnSave.Enabled = $false
     }
 
