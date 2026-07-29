@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# PSTaskBuilder - build, validate and edit Windows scheduled tasks that run PowerShell.
+# PSTSM - build, validate and edit Windows scheduled tasks that run PowerShell.
 # Copyright (C) 2026 Krytical13
 #
 # This program is free software: you can redistribute it and/or modify it under the terms of
@@ -14,9 +14,9 @@
 # You should have received a copy of the GNU General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 #
-# PSTaskBuilder.psm1
+# PSTSM.psm1
 # Loads every function under Functions\ (the headless engine) and UI\ (the WinForms front end)
-# and exports the PSTask-prefixed commands.
+# and exports the PSTSM-prefixed commands.
 #
 # Packaged as a module so the engine is a single versioned, testable unit that the UI - and
 # Pester - import, rather than dot-sourcing a directory. The engine never references the UI, so
@@ -30,4 +30,4 @@ foreach ($subdir in @('Functions', 'UI')) {
     }
 }
 
-Export-ModuleMember -Function '*-PSTask*'
+Export-ModuleMember -Function '*-PSTSM*'

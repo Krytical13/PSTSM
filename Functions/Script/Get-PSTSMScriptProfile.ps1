@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Get-PSTaskScriptProfile {
+function Get-PSTSMScriptProfile {
     <#
     .SYNOPSIS
         Reads a .ps1 and derives everything a scheduled task needs to know about it: engine,
         parameters, elevation, help text, and the behavioural signals that decide whether it
         can survive running unattended.
     .DESCRIPTION
-        This is the "select the script and the form fills itself in" half of PSTaskBuilder.
+        This is the "select the script and the form fills itself in" half of PSTSM.
         It never executes the script - everything comes from the abstract syntax tree, so it is
         safe to point at anything.
 
@@ -20,7 +20,7 @@ function Get-PSTaskScriptProfile {
           Description     - from .SYNOPSIS in comment-based help.
           Signals         - command/AST patterns that predict unattended failure (see below).
 
-        Signals collected (consumed by Test-PSTaskPlan):
+        Signals collected (consumed by Test-PSTSMPlan):
           InteractiveCommands - Read-Host, Get-Credential, Out-GridView, Pause and friends.
           NetworkCommands     - anything that authenticates outbound, which is what makes the
                                 S4U ("no password stored") logon type fail at 3am.
@@ -37,7 +37,7 @@ function Get-PSTaskScriptProfile {
     .OUTPUTS
         [pscustomobject] - see the object built at the end of this function.
     .EXAMPLE
-        $p = Get-PSTaskScriptProfile -Path .\Send-UserPassExpMail.ps1
+        $p = Get-PSTSMScriptProfile -Path .\Send-UserPassExpMail.ps1
         $p.Parameters | Format-Table Name, TypeName, IsMandatory, DefaultValue
     #>
     [CmdletBinding()]
@@ -114,7 +114,7 @@ function Get-PSTaskScriptProfile {
     # <# ... #> block as a continuation of its last section. In practice that means a
     # '#Requires -Version 5.1' sitting under the help block gets appended to whatever the
     # final .PARAMETER or .DESCRIPTION was, so it has to be stripped back out here.
-    function Get-PSTaskCleanHelpText([string]$text) {
+    function Get-PSTSMCleanHelpText([string]$text) {
         if ([string]::IsNullOrWhiteSpace($text)) { return $null }
         $t = ($text -replace '\s+', ' ').Trim()
         $t = $t -replace '(?i)\s*Requires\s+-(Version|Modules|PSEdition|RunAsAdministrator|Assembly|ShellId|PSSnapin)\b.*$', ''
@@ -129,11 +129,11 @@ function Get-PSTaskScriptProfile {
     try {
         $help = $ast.GetHelpContent()
         if ($help) {
-            $synopsis = Get-PSTaskCleanHelpText $help.Synopsis
-            $helpDescription = Get-PSTaskCleanHelpText $help.Description
+            $synopsis = Get-PSTSMCleanHelpText $help.Synopsis
+            $helpDescription = Get-PSTSMCleanHelpText $help.Description
             if ($help.Parameters) {
                 foreach ($k in $help.Parameters.Keys) {
-                    $paramHelp[$k] = Get-PSTaskCleanHelpText $help.Parameters[$k]
+                    $paramHelp[$k] = Get-PSTSMCleanHelpText $help.Parameters[$k]
                 }
             }
         }
@@ -201,8 +201,8 @@ function Get-PSTaskScriptProfile {
 
             # Work out what the expression WOULD produce, still without running it, so an
             # expression default can be shown to the operator instead of an empty box. Only
-            # a provably side-effect-free shape resolves; see Resolve-PSTaskDefaultValue.
-            $resolvedDefault = Resolve-PSTaskDefaultValue -Expression $defaultText -ScriptPath $resolved
+            # a provably side-effect-free shape resolves; see Resolve-PSTSMDefaultValue.
+            $resolvedDefault = Resolve-PSTSMDefaultValue -Expression $defaultText -ScriptPath $resolved
 
             # UI hints. Path-like parameters get a Browse button; credentials get blocked with
             # an explanation rather than a text box that would store a password in task XML.
@@ -327,7 +327,7 @@ function Get-PSTaskScriptProfile {
 
     # NOT $profile - that is an automatic variable.
     $scriptProfile = [PSCustomObject]@{
-        PSTypeName        = 'PSTaskBuilder.ScriptProfile'
+        PSTypeName        = 'PSTSM.ScriptProfile'
 
         Path              = $resolved
         FileName          = $item.Name
@@ -375,7 +375,7 @@ function Get-PSTaskScriptProfile {
     # A settings file next to the script is a hard dependency of the task that Task Scheduler
     # will never mention. Added after the fact because the detector reads the parameter list.
     $configFiles = @()
-    try { $configFiles = @(Get-PSTaskScriptConfigFile -ScriptProfile $scriptProfile) }
+    try { $configFiles = @(Get-PSTSMScriptConfigFile -ScriptProfile $scriptProfile) }
     catch { Write-Verbose "Config-file detection failed: $($_.Exception.Message)" }
     $scriptProfile | Add-Member -MemberType NoteProperty -Name 'ConfigFiles' -Value $configFiles
 

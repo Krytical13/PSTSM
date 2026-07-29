@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 <#
 .SYNOPSIS
-    Launches the PSTaskBuilder window.
+    Launches the PSTSM window.
 .DESCRIPTION
     Double-click entry point. Imports the module and opens the task list.
 
@@ -14,9 +14,9 @@
 .PARAMETER Relaunched
     Internal. Set on the STA relaunch so it cannot loop.
 .EXAMPLE
-    .\Start-PSTaskBuilder.ps1
+    .\Start-PSTSM.ps1
 .EXAMPLE
-    .\Start-PSTaskBuilder.ps1 -ScriptPath 'D:\Scripts\Send-Report.ps1'
+    .\Start-PSTSM.ps1 -ScriptPath 'D:\Scripts\Send-Report.ps1'
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +27,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $apartment = [System.Threading.Thread]::CurrentThread.GetApartmentState()
-if ($apartment -ne 'STA' -and -not $Relaunched -and -not $env:PSTASKBUILDER_NOLAUNCH) {
+if ($apartment -ne 'STA' -and -not $Relaunched -and -not $env:PSTSM_NOLAUNCH) {
     $self = $PSCommandPath
     if (-not $self) { $self = $MyInvocation.MyCommand.Path }
 
@@ -41,10 +41,10 @@ if ($apartment -ne 'STA' -and -not $Relaunched -and -not $env:PSTASKBUILDER_NOLA
     return
 }
 
-$moduleManifest = Join-Path $PSScriptRoot 'PSTaskBuilder.psd1'
+$moduleManifest = Join-Path $PSScriptRoot 'PSTSM.psd1'
 if (-not (Test-Path -LiteralPath $moduleManifest)) {
-    throw "PSTaskBuilder.psd1 not found next to this script ($PSScriptRoot)."
+    throw "PSTSM.psd1 not found next to this script ($PSScriptRoot)."
 }
 Import-Module $moduleManifest -Force
 
-if ($ScriptPath) { Show-PSTaskBuilder -ScriptPath $ScriptPath } else { Show-PSTaskBuilder }
+if ($ScriptPath) { Show-PSTSM -ScriptPath $ScriptPath } else { Show-PSTSM }

@@ -1,4 +1,4 @@
-# PSTaskBuilder
+# PSTSM
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
@@ -17,7 +17,7 @@ be derived, defaults the rest sensibly, and names the specific ways a task fails
 ## Run it
 
 ```
-.\Start-PSTaskBuilder.ps1
+.\Start-PSTSM.ps1
 ```
 
 That opens the task list. The launcher handles the STA relaunch that `pwsh` needs — WinForms
@@ -37,41 +37,41 @@ Declared defaults are pre-filled so the form and the preview always agree. The r
 the exact command that will be registered and the live preflight; saving is blocked while any
 `Error` check stands.
 
-Editing an existing task opens the same form via `ConvertFrom-PSTaskDefinition`, so a task
+Editing an existing task opens the same form via `ConvertFrom-PSTSMDefinition`, so a task
 created here reopens exactly as it was saved.
 
 ## Scripted use
 
 ```powershell
-Import-Module .\PSTaskBuilder.psd1
+Import-Module .\PSTSM.psd1
 
 # Everything below the script path is derived and overridable.
-$plan = New-PSTaskPlan -ScriptPath 'D:\Scripts\Send-NightlyReport.ps1' `
+$plan = New-PSTSMPlan -ScriptPath 'D:\Scripts\Send-NightlyReport.ps1' `
                        -Parameters ([ordered]@{ SmtpServer = 'mail.contoso.com'; DaysOut = 14 }) `
                        -TaskPath   'Custom' `
-                       -Trigger    (New-PSTaskTriggerSpec -Type Daily -At '07:00' -RandomDelay '00:05:00')
+                       -Trigger    (New-PSTSMTriggerSpec -Type Daily -At '07:00' -RandomDelay '00:05:00')
 
 $plan.ArgumentString          # exactly what gets registered
-Test-PSTaskPlan -Plan $plan   # preflight before anything is written
-Register-PSTaskPlan -Plan $plan
+Test-PSTSMPlan -Plan $plan   # preflight before anything is written
+Register-PSTSMPlan -Plan $plan
 ```
 
 Browse and edit what already exists:
 
 ```powershell
-Get-PSTaskInventory -PowerShellOnly |
+Get-PSTSMInventory -PowerShellOnly |
     Format-Table TaskName, State, LastResultText, ScriptName, TriggerSummary
 
-$plan = ConvertFrom-PSTaskDefinition -TaskName 'Send-NightlyReport' -TaskPath '\Custom\'
-$plan.Triggers = @(New-PSTaskTriggerSpec -Type Daily -At '06:00')
-Register-PSTaskPlan -Plan $plan
+$plan = ConvertFrom-PSTSMDefinition -TaskName 'Send-NightlyReport' -TaskPath '\Custom\'
+$plan.Triggers = @(New-PSTSMTriggerSpec -Type Daily -At '06:00')
+Register-PSTSMPlan -Plan $plan
 ```
 
 Config-as-code:
 
 ```powershell
-Export-PSTaskPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
-Import-PSTaskPlan -Path .\Plans\NightlyReport.task.json | Register-PSTaskPlan
+Export-PSTSMPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
+Import-PSTSMPlan -Path .\Plans\NightlyReport.task.json | Register-PSTSMPlan
 ```
 
 ## What gets derived from the script
@@ -88,7 +88,7 @@ One `Parser::ParseFile` call — the script is never executed.
 | Working directory | script's own folder |
 | **Parameters** | `param()` block: name, type, switch, mandatory, default, `ValidateSet`, `ValidateRange`, aliases, per-parameter help |
 
-`Get-PSTaskScriptProfile` also returns UI hints (`IsPathLike` → Browse button, `IsCredential` →
+`Get-PSTSMScriptProfile` also returns UI hints (`IsPathLike` → Browse button, `IsCredential` →
 refuse rather than put a secret on a command line) and the behavioural signals the preflight
 consumes.
 
@@ -104,7 +104,7 @@ Parameter defaults come in three kinds, and they are treated differently on purp
 
 **Nothing is ever executed to work this out.** This tool gets pointed at scripts you did not
 write, so opening one must never be a way to run it — a default could as easily be
-`(Get-Content C:\secrets\key.txt)`. `Resolve-PSTaskDefaultValue` walks the AST and computes a
+`(Get-Content C:\secrets\key.txt)`. `Resolve-PSTSMDefaultValue` walks the AST and computes a
 value only for a provably side-effect-free shape: literals, `$PSScriptRoot`, `$env:*`,
 `Join-Path`, `+` concatenation, and interpolated strings made only of those. Everything else
 stays unresolved and is displayed as text.
@@ -131,7 +131,7 @@ expressions rather than evaluating them; `.json` with `ConvertFrom-Json`. Top-le
 listed so you can confirm it is the file you meant — nothing is interpreted, because the tool
 cannot know what any of those keys mean.
 
-## Preflight (`Test-PSTaskPlan`)
+## Preflight (`Test-PSTSMPlan`)
 
 Every check answers one question: *this works in my console — will it still work when Task
 Scheduler runs it?* `Error` blocks registration, `Warning` is a real risk to acknowledge.
@@ -242,15 +242,15 @@ Task Scheduler's defaults are tuned for interactive desktop tasks. These are not
 
 ## Logging
 
-`Logging.Mode = 'Transcript'` (default) generates `<ScriptDir>\.pstask\<TaskName>.wrapper.ps1`
+`Logging.Mode = 'Transcript'` (default) generates `<ScriptDir>\.pstsm\<TaskName>.wrapper.ps1`
 and points the action at it. The wrapper starts a transcript, forwards the arguments
 unchanged, converts a terminating error into `exit 1`, propagates `$LASTEXITCODE`, and prunes
 logs past `RetentionDays`. It is regenerated on every save and carries a do-not-edit header —
-it is build output, not source. `ConvertFrom-PSTaskDefinition` sees through it, so editing a
+it is build output, not source. `ConvertFrom-PSTSMDefinition` sees through it, so editing a
 task shows your script, not the shim. Set `Mode = 'None'` to point the action straight at the
 script.
 
-If your scripts live in a repo, add `.pstask/` to its `.gitignore` — the wrappers are
+If your scripts live in a repo, add `.pstsm/` to its `.gitignore` — the wrappers are
 generated per machine and per task, and there is no reason to track them.
 
 ## Verified behaviour
@@ -262,7 +262,7 @@ Do not "tidy" any of them without re-running the experiment.
    backslash, embedded quotes, UNC, `&`, `;`, `$`, backtick, parens) on both Windows PowerShell
    5.1 and PowerShell 7. Only the `CommandLineToArgvW` rule — doubling backslash runs before a
    quote and at end-of-argument — is correct in every case. That is what
-   `ConvertTo-PSTaskQuotedValue` implements.
+   `ConvertTo-PSTSMQuotedValue` implements.
 
 2. **Wrapper argument forwarding.** An advanced function with
    `[Parameter(ValueFromRemainingArguments)]` **swallows the `-Name` tokens and re-binds the
@@ -302,23 +302,23 @@ Do not "tidy" any of them without re-running the experiment.
 
 ## Commands
 
-**Script analysis** — `Get-PSTaskScriptProfile`, `Get-PSTaskEngine`
+**Script analysis** — `Get-PSTSMScriptProfile`, `Get-PSTSMEngine`
 
-**Plan** — `New-PSTaskPlan`, `New-PSTaskTriggerSpec`, `Test-PSTaskPlan`,
-`ConvertTo-PSTaskArgument`, `ConvertTo-PSTaskQuotedValue`, `Export-PSTaskPlan`,
-`Import-PSTaskPlan`
+**Plan** — `New-PSTSMPlan`, `New-PSTSMTriggerSpec`, `Test-PSTSMPlan`,
+`ConvertTo-PSTSMArgument`, `ConvertTo-PSTSMQuotedValue`, `Export-PSTSMPlan`,
+`Import-PSTSMPlan`
 
-**Task Scheduler** — `Get-PSTaskInventory`, `Register-PSTaskPlan`, `New-PSTaskLogWrapper`,
-`ConvertFrom-PSTaskDefinition`, `ConvertFrom-PSTaskAction`, `ConvertTo-PSTaskCimTrigger`,
-`ConvertFrom-PSTaskCimTrigger`, `ConvertFrom-PSTaskDuration`, `ConvertFrom-PSTaskResultCode`,
-`ConvertFrom-PSTaskTriggerSummary`
+**Task Scheduler** — `Get-PSTSMInventory`, `Register-PSTSMPlan`, `New-PSTSMLogWrapper`,
+`ConvertFrom-PSTSMDefinition`, `ConvertFrom-PSTSMAction`, `ConvertTo-PSTSMCimTrigger`,
+`ConvertFrom-PSTSMCimTrigger`, `ConvertFrom-PSTSMDuration`, `ConvertFrom-PSTSMResultCode`,
+`ConvertFrom-PSTSMTriggerSummary`
 
-**UI** — `Show-PSTaskBuilder`, `Show-PSTaskEditor`, `Show-PSTaskTriggerDialog`
+**UI** — `Show-PSTSM`, `Show-PSTSMEditor`, `Show-PSTSMTriggerDialog`
 
 The engine never references the UI, so it stays usable from a console, a build agent, or a
 scheduled task of its own.
 
-`Show-PSTaskEditor` is deliberately one long function rather than a set of smaller ones. Its
+`Show-PSTSMEditor` is deliberately one long function rather than a set of smaller ones. Its
 event handlers are plain scriptblocks that read the defining function's locals — the only
 pattern that keeps module affinity on 5.1 (see #4 above) — and that only works while that
 function's frame is on the stack, which it is for the whole life of a modal `ShowDialog`.
@@ -326,7 +326,7 @@ Splitting the handlers into separate functions would break them at runtime, not 
 
 ## Round-trip safety
 
-`ConvertFrom-PSTaskDefinition` sets `IsFullyRecognized = $false` and preserves the original
+`ConvertFrom-PSTSMDefinition` sets `IsFullyRecognized = $false` and preserves the original
 `Execute`/`Arguments` in `RawAction` when a task was built some other way — inline `-Command`
 code, a non-PowerShell action, or multiple actions. The UI must offer a raw-arguments box in
 that case. Silently rewriting somebody's working task into our preferred shape is how you
@@ -335,8 +335,8 @@ break production.
 ## Tests
 
 ```powershell
-Invoke-Pester -Path .\Tests\PSTaskBuilder.Tests.ps1      # engine, 86 tests
-Invoke-Pester -Path .\Tests\PSTaskBuilder.UI.Tests.ps1   # UI, 23 tests
+Invoke-Pester -Path .\Tests\PSTSM.Tests.ps1      # engine, 86 tests
+Invoke-Pester -Path .\Tests\PSTSM.UI.Tests.ps1   # UI, 23 tests
 ```
 
 Nothing in either suite registers a real scheduled task. The engine suite is offline apart from
@@ -357,11 +357,11 @@ A green MTA run means much less than it looks like; the suite prints which apart
 ## Requirements
 
 Windows PowerShell 5.1 or PowerShell 7+, on Windows. The `ScheduledTasks` module (in-box) is
-needed only for `Get-PSTaskInventory`, `Register-PSTaskPlan` and `ConvertFrom-PSTaskDefinition`;
+needed only for `Get-PSTSMInventory`, `Register-PSTSMPlan` and `ConvertFrom-PSTSMDefinition`;
 the derivation and argument-building commands run anywhere. Registering a task generally
 requires elevation.
 
-Set `PSTASKBUILDER_NODIALOG=1` in any automated run. Without it, an exception inside a WinForms
+Set `PSTSM_NODIALOG=1` in any automated run. Without it, an exception inside a WinForms
 handler reaches the global handler and pops a modal message box on the desktop of whoever is at
 the machine.
 

@@ -1,19 +1,19 @@
 # Trademark and naming
 
-The **PSTaskBuilder** name and any associated logo are not covered by the GPL-3.0 licence that
+The **PSTSM** name and any associated logo are not covered by the GPL-3.0 licence that
 applies to the source code. Copyright licences and trademark rights are separate things: the
 GPL gives you broad rights to the *code*, and says nothing about the *name*.
 
 ## What you may do
 
 - Use, modify, fork and redistribute the code under GPL-3.0 — including commercially.
-- Say truthfully that your project is "based on PSTaskBuilder", "a fork of PSTaskBuilder", or
-  "compatible with PSTaskBuilder".
+- Say truthfully that your project is "based on PSTSM", "a fork of PSTSM", or
+  "compatible with PSTSM".
 - Keep the name in unmodified copies you redistribute.
 
 ## What to please avoid
 
-- Naming a modified or repackaged version **PSTaskBuilder**, or a name close enough to be
+- Naming a modified or repackaged version **PSTSM**, or a name close enough to be
   confused with it, in a way that suggests it is this project or endorsed by it.
 - Using the name to market a separate product or service as though it were this one.
 

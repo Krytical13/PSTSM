@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Show-PSTaskAccountPicker {
+function Show-PSTSMAccountPicker {
     <#
     .SYNOPSIS
         Picks the account a task runs as - an existing gMSA, an existing user/service account,
@@ -20,7 +20,7 @@ function Show-PSTaskAccountPicker {
     .OUTPUTS
         [pscustomobject] Name, SuggestedLogonType - or $null if cancelled.
     .EXAMPLE
-        $picked = Show-PSTaskAccountPicker
+        $picked = Show-PSTSMAccountPicker
         if ($picked) { $account = $picked.Name; $logon = $picked.SuggestedLogonType }
     #>
     [CmdletBinding()]
@@ -33,12 +33,12 @@ function Show-PSTaskAccountPicker {
         [switch]$BuildOnly
     )
 
-    Initialize-PSTaskUIHost
-    $t = Get-PSTaskUITheme
+    Initialize-PSTSMUIHost
+    $t = Get-PSTSMUITheme
 
     $dlg = @{ Picked = $null; Rows = @() }
 
-    $form = New-PSTaskUIForm -Title 'Select the account to run as' -Width 820 -Height 600
+    $form = New-PSTSMUIForm -Title 'Select the account to run as' -Width 820 -Height 600
     $form.MinimumSize = New-Object System.Drawing.Size(0, 0)
 
     $root = New-Object System.Windows.Forms.TableLayoutPanel
@@ -54,11 +54,11 @@ function Show-PSTaskAccountPicker {
     $filterRow.Dock = 'Top'; $filterRow.AutoSize = $true; $filterRow.WrapContents = $true
     $filterRow.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
 
-    $lblShow = New-PSTaskUILabel -Text 'Show'
+    $lblShow = New-PSTSMUILabel -Text 'Show'
     $lblShow.Margin = New-Object System.Windows.Forms.Padding(3, 9, 6, 3)
     $cboType = New-Object System.Windows.Forms.ComboBox
     $cboType.DropDownStyle = 'DropDownList'
-    $cboType.Width = [int](210 * (Get-PSTaskUIScale))
+    $cboType.Width = [int](210 * (Get-PSTSMUIScale))
     $cboType.Margin = New-Object System.Windows.Forms.Padding(3, 6, 16, 3)
     $typeMap = [ordered]@{
         'All'     = 'Everything'
@@ -68,13 +68,13 @@ function Show-PSTaskAccountPicker {
     }
     foreach ($k in $typeMap.Keys) { [void]$cboType.Items.Add($typeMap[$k]) }
 
-    $lblFind = New-PSTaskUILabel -Text 'Name contains'
+    $lblFind = New-PSTSMUILabel -Text 'Name contains'
     $lblFind.Margin = New-Object System.Windows.Forms.Padding(3, 9, 6, 3)
     $txtFind = New-Object System.Windows.Forms.TextBox
-    $txtFind.Width = [int](200 * (Get-PSTaskUIScale))
+    $txtFind.Width = [int](200 * (Get-PSTSMUIScale))
     $txtFind.BorderStyle = 'FixedSingle'
     $txtFind.Margin = New-Object System.Windows.Forms.Padding(3, 6, 8, 3)
-    $btnFind = New-PSTaskUIButton -Text 'Search' -Width 90
+    $btnFind = New-PSTSMUIButton -Text 'Search' -Width 90
 
     foreach ($c in @($lblShow, $cboType, $lblFind, $txtFind, $btnFind)) { [void]$filterRow.Controls.Add($c) }
 
@@ -86,14 +86,14 @@ function Show-PSTaskAccountPicker {
     [void]$lv.Columns.Add('Type', 10)
     [void]$lv.Columns.Add('Description', 10)
 
-    $lblDetail = New-PSTaskUILabel -Text '' -ForeColor $t.Muted
+    $lblDetail = New-PSTSMUILabel -Text '' -ForeColor $t.Muted
     $lblDetail.Dock = 'Top'
     $lblDetail.MaximumSize = New-Object System.Drawing.Size(760, 0)
     $lblDetail.Margin = New-Object System.Windows.Forms.Padding(3, 8, 3, 4)
 
     # --- behaviour ------------------------------------------------------------------------------
     $sizeColumns = {
-        $scale = Get-PSTaskUIScale
+        $scale = Get-PSTSMUIScale
         $lv.Columns[0].Width = [int](230 * $scale)
         $lv.Columns[1].Width = [int](90 * $scale)
         $rest = $lv.ClientSize.Width - $lv.Columns[0].Width - $lv.Columns[1].Width -
@@ -109,7 +109,7 @@ function Show-PSTaskAccountPicker {
             $type = if ($cboType.SelectedIndex -ge 0) { $keys[$cboType.SelectedIndex] } else { 'All' }
             $p = @{ Type = $type }
             if ($txtFind.Text.Trim()) { $p['Filter'] = $txtFind.Text.Trim() }
-            try { $dlg.Rows = @(Get-PSTaskRunAsAccount @p) }
+            try { $dlg.Rows = @(Get-PSTSMRunAsAccount @p) }
             catch { $dlg.Rows = @(); Write-Verbose $_.Exception.Message }
 
             $lv.BeginUpdate()
@@ -149,13 +149,13 @@ function Show-PSTaskAccountPicker {
     $txtFind.add_KeyDown({ if ($args[1].KeyCode -eq [System.Windows.Forms.Keys]::Enter) { $args[1].SuppressKeyPress = $true; & $reload } })
 
     # --- actions ------------------------------------------------------------------------------
-    $btnNewGmsa = New-PSTaskUIButton -Text 'Create a gMSA...' -Width 140
-    $btnSelect = New-PSTaskUIButton -Text 'Select' -Primary -Width 100
-    $btnCancel = New-PSTaskUIButton -Text 'Cancel'
+    $btnNewGmsa = New-PSTSMUIButton -Text 'Create a gMSA...' -Width 140
+    $btnSelect = New-PSTSMUIButton -Text 'Select' -Primary -Width 100
+    $btnCancel = New-PSTSMUIButton -Text 'Cancel'
     $btnSelect.Enabled = $false
 
     $btnNewGmsa.add_Click({
-            $created = Show-PSTaskGmsaDialog -Owner $form
+            $created = Show-PSTSMGmsaDialog -Owner $form
             if ($created) {
                 $dlg.Picked = [PSCustomObject]@{ Name = $created; SuggestedLogonType = 'gMSA' }
                 $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -178,7 +178,7 @@ function Show-PSTaskAccountPicker {
             $form.Close()
         })
 
-    $bar = New-PSTaskUIActionBar -LeftButton @($btnNewGmsa) -RightButton @($btnCancel, $btnSelect)
+    $bar = New-PSTSMUIActionBar -LeftButton @($btnNewGmsa) -RightButton @($btnCancel, $btnSelect)
 
     $root.Controls.Add($filterRow, 0, 0)
     $root.Controls.Add($lv, 0, 1)

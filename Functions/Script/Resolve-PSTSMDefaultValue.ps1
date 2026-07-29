@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Resolve-PSTaskDefaultValue {
+function Resolve-PSTSMDefaultValue {
     <#
     .SYNOPSIS
         Works out what a parameter's default expression will evaluate to, WITHOUT executing it.
@@ -33,13 +33,13 @@ function Resolve-PSTaskDefaultValue {
         script computes the same thing at run time, and passing a value the operator never chose
         would freeze anything time-dependent and hide where the value came from.
     .PARAMETER Expression
-        The default's source text, as captured by Get-PSTaskScriptProfile.
+        The default's source text, as captured by Get-PSTSMScriptProfile.
     .PARAMETER ScriptPath
         Path of the script the default came from, so $PSScriptRoot and $PSCommandPath resolve.
     .OUTPUTS
         [pscustomobject] Kind ('Literal' | 'Resolved' | 'Unresolved'), Value, Text
     .EXAMPLE
-        Resolve-PSTaskDefaultValue -Expression "(Join-Path `$PSScriptRoot 'settings.psd1')" -ScriptPath 'C:\s\Run.ps1'
+        Resolve-PSTSMDefaultValue -Expression "(Join-Path `$PSScriptRoot 'settings.psd1')" -ScriptPath 'C:\s\Run.ps1'
     #>
     [CmdletBinding()]
     param(
@@ -51,7 +51,7 @@ function Resolve-PSTaskDefaultValue {
     )
 
     $unresolved = [PSCustomObject]@{
-        PSTypeName = 'PSTaskBuilder.DefaultValue'
+        PSTypeName = 'PSTSM.DefaultValue'
         Kind       = 'Unresolved'
         Value      = $null
         Text       = $Expression
@@ -197,7 +197,7 @@ function Resolve-PSTaskDefaultValue {
     if (-not $result.Ok) { return $unresolved }
 
     [PSCustomObject]@{
-        PSTypeName = 'PSTaskBuilder.DefaultValue'
+        PSTypeName = 'PSTSM.DefaultValue'
         Kind       = $(if ($result.Literal) { 'Literal' } else { 'Resolved' })
         Value      = $result.Value
         Text       = $Expression

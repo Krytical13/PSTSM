@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function New-PSTaskGmsa {
+function New-PSTSMGmsa {
     <#
     .SYNOPSIS
         Creates a group managed service account, using the caller's own Windows credentials.
@@ -20,7 +20,7 @@ function New-PSTaskGmsa {
         this by default, otherwise it must be delegated on the target OU.
 
         Creating the account is only step one. The host that will run the task still needs
-        Install-PSTaskGmsa.
+        Install-PSTSMGmsa.
     .PARAMETER Name
         gMSA name WITHOUT the trailing '$'. Maximum 15 characters, and unique across the whole
         FOREST - not merely the domain.
@@ -41,7 +41,7 @@ function New-PSTaskGmsa {
     .OUTPUTS
         The created account when -PassThru is used.
     .EXAMPLE
-        New-PSTaskGmsa -Name 'svc_reports' -PrincipalsAllowedToRetrieveManagedPassword 'gg_ReportHosts'
+        New-PSTSMGmsa -Name 'svc_reports' -PrincipalsAllowedToRetrieveManagedPassword 'gg_ReportHosts'
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(

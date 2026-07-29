@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function ConvertFrom-PSTaskDefinition {
+function ConvertFrom-PSTSMDefinition {
     <#
     .SYNOPSIS
         Turns an already-registered scheduled task back into an editable plan.
     .DESCRIPTION
-        The other half of the round trip. Get-PSTaskInventory shows the list; this opens a row
+        The other half of the round trip. Get-PSTSMInventory shows the list; this opens a row
         in the same form that created it, so "change the schedule" and "change the account" do
         not mean dropping into taskschd.msc.
 
@@ -23,12 +23,12 @@ function ConvertFrom-PSTaskDefinition {
     .PARAMETER TaskPath
         Folder of the task to load. Default '\'.
     .OUTPUTS
-        [pscustomobject] PSTaskBuilder.TaskPlan, with extra IsFullyRecognized / RawAction /
+        [pscustomobject] PSTSM.TaskPlan, with extra IsFullyRecognized / RawAction /
         ParseNotes members.
     .EXAMPLE
-        $plan = ConvertFrom-PSTaskDefinition -TaskName 'Nightly Report' -TaskPath '\Custom\'
-        $plan.Triggers = @(New-PSTaskTriggerSpec -Type Daily -At '06:00')
-        Register-PSTaskPlan -Plan $plan
+        $plan = ConvertFrom-PSTSMDefinition -TaskName 'Nightly Report' -TaskPath '\Custom\'
+        $plan.Triggers = @(New-PSTSMTriggerSpec -Type Daily -At '06:00')
+        Register-PSTSMPlan -Plan $plan
     #>
     [CmdletBinding(DefaultParameterSetName = 'ByObject')]
     param(
@@ -54,7 +54,7 @@ function ConvertFrom-PSTaskDefinition {
             $notes.Add("Task has $(@($Task.Actions).Count) actions; only the first is modelled. Saving will drop the others.")
         }
 
-        $parsed = ConvertFrom-PSTaskAction -Execute $action.Execute `
+        $parsed = ConvertFrom-PSTSMAction -Execute $action.Execute `
             -Arguments $action.Arguments `
             -WorkingDirectory $action.WorkingDirectory
         foreach ($n in $parsed.Notes) { $notes.Add($n) }
@@ -66,7 +66,7 @@ function ConvertFrom-PSTaskDefinition {
         $logDirectory = $null
         $retentionDays = 30
 
-        if ($scriptPath -and $scriptPath -match '\\\.pstask\\.+\.wrapper\.ps1$') {
+        if ($scriptPath -and $scriptPath -match '\\\.pstsm\\.+\.wrapper\.ps1$') {
             $loggingMode = 'Transcript'
             try {
                 $wrapperText = Get-Content -LiteralPath $scriptPath -Raw -ErrorAction Stop
@@ -75,14 +75,14 @@ function ConvertFrom-PSTaskDefinition {
                 if ($wrapperText -match '(?m)^\s*\$retentionDays\s*=\s*(?<r>\d+)\s*$') { $retentionDays = [int]$Matches['r'] }
             }
             catch {
-                $notes.Add("Action targets a PSTaskBuilder wrapper that could not be read: $scriptPath")
+                $notes.Add("Action targets a PSTSM wrapper that could not be read: $scriptPath")
             }
         }
 
         # --- triggers back to specs -----------------------------------------------------
         $triggerSpecs = New-Object System.Collections.Generic.List[object]
         foreach ($t in @($Task.Triggers)) {
-            $spec = ConvertFrom-PSTaskCimTrigger -Trigger $t
+            $spec = ConvertFrom-PSTSMCimTrigger -Trigger $t
             if ($spec) { $triggerSpecs.Add($spec) }
             else { $notes.Add("Trigger type '$($t.CimClass.CimClassName)' is not editable here and will be preserved as-is only if you do not re-register.") }
         }
@@ -92,9 +92,9 @@ function ConvertFrom-PSTaskDefinition {
         $settings = [ordered]@{
             MultipleInstances          = [string]$ts.MultipleInstances
             StartWhenAvailable         = [bool]$ts.StartWhenAvailable
-            ExecutionTimeLimit         = (ConvertFrom-PSTaskDuration -Value $ts.ExecutionTimeLimit)
+            ExecutionTimeLimit         = (ConvertFrom-PSTSMDuration -Value $ts.ExecutionTimeLimit)
             RestartCount               = [int]$ts.RestartCount
-            RestartInterval            = (ConvertFrom-PSTaskDuration -Value $ts.RestartInterval)
+            RestartInterval            = (ConvertFrom-PSTSMDuration -Value $ts.RestartInterval)
             DisallowStartIfOnBatteries = [bool]$ts.DisallowStartIfOnBatteries
             StopIfGoingOnBatteries     = [bool]$ts.StopIfGoingOnBatteries
             RunOnlyIfNetworkAvailable  = [bool]$ts.RunOnlyIfNetworkAvailable
@@ -110,7 +110,7 @@ function ConvertFrom-PSTaskDefinition {
         $engineId = if ($parsed.EngineId) { $parsed.EngineId } else { 'powershell' }
 
         $plan = [PSCustomObject]@{
-            PSTypeName        = 'PSTaskBuilder.TaskPlan'
+            PSTypeName        = 'PSTSM.TaskPlan'
             SchemaVersion     = 1
 
             TaskName          = $Task.TaskName
@@ -171,7 +171,7 @@ function ConvertFrom-PSTaskDefinition {
         }
 
         $plan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value {
-            ConvertTo-PSTaskArgument -ScriptPath $this.ScriptPath `
+            ConvertTo-PSTSMArgument -ScriptPath $this.ScriptPath `
                 -Parameters $this.Parameters `
                 -ExtraArguments $this.ExtraArguments `
                 -ExecutionPolicy $this.ExecutionPolicy `
@@ -184,10 +184,10 @@ function ConvertFrom-PSTaskDefinition {
     }
 }
 
-function ConvertFrom-PSTaskCimTrigger {
+function ConvertFrom-PSTSMCimTrigger {
     <#
     .SYNOPSIS
-        Converts a live CIM trigger back into a New-PSTaskTriggerSpec-shaped object.
+        Converts a live CIM trigger back into a New-PSTSMTriggerSpec-shaped object.
     .PARAMETER Trigger
         A trigger from a registered task.
     .OUTPUTS
@@ -228,22 +228,22 @@ function ConvertFrom-PSTaskCimTrigger {
     }
 
     [PSCustomObject]@{
-        PSTypeName         = 'PSTaskBuilder.TriggerSpec'
+        PSTypeName         = 'PSTSM.TriggerSpec'
         Type               = $type
         At                 = $at
         DaysOfWeek         = $daysOfWeek
         DaysInterval       = if ($Trigger.PSObject.Properties['DaysInterval'] -and $Trigger.DaysInterval) { [int]$Trigger.DaysInterval } else { 1 }
         WeeksInterval      = if ($Trigger.PSObject.Properties['WeeksInterval'] -and $Trigger.WeeksInterval) { [int]$Trigger.WeeksInterval } else { 1 }
         UserId             = if ($Trigger.PSObject.Properties['UserId']) { $Trigger.UserId } else { $null }
-        RepetitionInterval = if ($Trigger.Repetition) { ConvertFrom-PSTaskDuration -Value $Trigger.Repetition.Interval } else { $null }
-        RepetitionDuration = if ($Trigger.Repetition) { ConvertFrom-PSTaskDuration -Value $Trigger.Repetition.Duration } else { $null }
-        RandomDelay        = if ($Trigger.PSObject.Properties['RandomDelay']) { ConvertFrom-PSTaskDuration -Value $Trigger.RandomDelay } else { $null }
-        Delay              = if ($Trigger.PSObject.Properties['Delay']) { ConvertFrom-PSTaskDuration -Value $Trigger.Delay } else { $null }
+        RepetitionInterval = if ($Trigger.Repetition) { ConvertFrom-PSTSMDuration -Value $Trigger.Repetition.Interval } else { $null }
+        RepetitionDuration = if ($Trigger.Repetition) { ConvertFrom-PSTSMDuration -Value $Trigger.Repetition.Duration } else { $null }
+        RandomDelay        = if ($Trigger.PSObject.Properties['RandomDelay']) { ConvertFrom-PSTSMDuration -Value $Trigger.RandomDelay } else { $null }
+        Delay              = if ($Trigger.PSObject.Properties['Delay']) { ConvertFrom-PSTSMDuration -Value $Trigger.Delay } else { $null }
         Enabled            = [bool]$Trigger.Enabled
     }
 }
 
-function ConvertFrom-PSTaskDuration {
+function ConvertFrom-PSTSMDuration {
     <#
     .SYNOPSIS
         Converts an ISO 8601 duration (as Task Scheduler stores them) to hh:mm:ss.

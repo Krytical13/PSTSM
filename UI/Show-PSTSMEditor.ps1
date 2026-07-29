@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Show-PSTaskEditor {
+function Show-PSTSMEditor {
     <#
     .SYNOPSIS
         The create/edit window: pick a script, everything derivable fills itself in, change
@@ -7,14 +7,14 @@ function Show-PSTaskEditor {
     .DESCRIPTION
         Left pane is the form, right pane is a live preview plus preflight. Every control edit
         rebuilds the plan and refreshes both, so what you read on the right is always what
-        Register-PSTaskPlan would write - there is no separate "generate" step to fall out of
+        Register-PSTSMPlan would write - there is no separate "generate" step to fall out of
         sync.
 
         The parameter section is generated from the script's own param() block: switches become
         checkboxes, ValidateSet becomes a combo box, path-like parameters get a Browse button,
         and mandatory ones are marked and enforced by the preflight.
 
-        Opening an existing task (-Plan from ConvertFrom-PSTaskDefinition) uses the same form.
+        Opening an existing task (-Plan from ConvertFrom-PSTSMDefinition) uses the same form.
         If that task was not built by this tool and its action cannot be modelled, the argument
         string is shown read-only and saving is blocked rather than silently rewriting it.
     .PARAMETER ScriptPath
@@ -36,9 +36,9 @@ function Show-PSTaskEditor {
         [pscustomobject] the saved plan, or $null if cancelled.
         [System.Windows.Forms.Form] when -BuildOnly is used.
     .EXAMPLE
-        Show-PSTaskEditor -ScriptPath 'D:\Scripts\Send-Report.ps1'
+        Show-PSTSMEditor -ScriptPath 'D:\Scripts\Send-Report.ps1'
     .EXAMPLE
-        Show-PSTaskEditor -Plan (ConvertFrom-PSTaskDefinition -TaskName 'Nightly' -TaskPath '\Custom\')
+        Show-PSTSMEditor -Plan (ConvertFrom-PSTSMDefinition -TaskName 'Nightly' -TaskPath '\Custom\')
     #>
     [CmdletBinding(DefaultParameterSetName = 'New')]
     param(
@@ -55,8 +55,8 @@ function Show-PSTaskEditor {
         [switch]$SelfTest
     )
 
-    Initialize-PSTaskUIHost
-    $t = Get-PSTaskUITheme
+    Initialize-PSTSMUIHost
+    $t = Get-PSTSMUITheme
 
     # --- state ----------------------------------------------------------------------
     # A hashtable rather than $script: scope, so two editor windows can never collide.
@@ -84,8 +84,10 @@ function Show-PSTaskEditor {
         if ($Plan.PSObject.Properties['IsFullyRecognized'] -and -not $Plan.IsFullyRecognized) { $state.Locked = $true }
     }
 
-    $title = if ($Plan) { "Edit task - $($Plan.TaskName)" } else { 'New scheduled task' }
-    $form = New-PSTaskUIForm -Title $title -Width 1180 -Height 780
+    # Product name first, then what this window is doing. Consistent across every window so the
+    # tool is identifiable in a crowded taskbar.
+    $title = if ($Plan) { "PSTSM - Edit task: $($Plan.TaskName)" } else { 'PSTSM - New task' }
+    $form = New-PSTSMUIForm -Title $title -Width 1180 -Height 780
 
     $root = New-Object System.Windows.Forms.TableLayoutPanel
     $root.Dock = 'Fill'
@@ -114,9 +116,9 @@ function Show-PSTaskEditor {
     # client width, and a pixel constant here would be too narrow once the font scales up.
 
     # --- script ---------------------------------------------------------------------
-    $secScript = New-PSTaskUISection -Title 'Script'
-    $txtScript = New-PSTaskUITextBox -Text $ScriptPath
-    $btnBrowseScript = New-PSTaskUIButton -Text 'Browse...' -Width 90
+    $secScript = New-PSTSMUISection -Title 'Script'
+    $txtScript = New-PSTSMUITextBox -Text $ScriptPath
+    $btnBrowseScript = New-PSTSMUIButton -Text 'Browse...' -Width 90
 
     $scriptRow = New-Object System.Windows.Forms.TableLayoutPanel
     $scriptRow.Dock = 'Top'; $scriptRow.AutoSize = $true; $scriptRow.ColumnCount = 2; $scriptRow.RowCount = 1
@@ -124,46 +126,46 @@ function Show-PSTaskEditor {
     [void]$scriptRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
     $scriptRow.Controls.Add($txtScript, 0, 0)
     $scriptRow.Controls.Add($btnBrowseScript, 1, 0)
-    Add-PSTaskUIStacked -Stack $secScript.Content -Control $scriptRow
+    Add-PSTSMUIStacked -Stack $secScript.Content -Control $scriptRow
 
-    $lblDerived = New-PSTaskUILabel -Text '' -ForeColor $t.Muted
-    Add-PSTaskUIStacked -Stack $secScript.Content -Control $lblDerived
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secScript.Container
+    $lblDerived = New-PSTSMUILabel -Text '' -ForeColor $t.Muted
+    Add-PSTSMUIStacked -Stack $secScript.Content -Control $lblDerived
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secScript.Container
 
     # --- task identity --------------------------------------------------------------
-    $secTask = New-PSTaskUISection -Title 'Task'
-    $tblTask = New-PSTaskUIFieldTable
-    $txtName = New-PSTaskUITextBox
-    $txtFolder = New-PSTaskUITextBox -Text '\'
-    $txtDesc = New-PSTaskUITextBox
-    Add-PSTaskUIField -Table $tblTask -Label 'Name' -Control $txtName
-    Add-PSTaskUIField -Table $tblTask -Label 'Folder' -Control $txtFolder
-    Add-PSTaskUIField -Table $tblTask -Label 'Description' -Control $txtDesc
-    Add-PSTaskUIStacked -Stack $secTask.Content -Control $tblTask
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secTask.Container
+    $secTask = New-PSTSMUISection -Title 'Task'
+    $tblTask = New-PSTSMUIFieldTable
+    $txtName = New-PSTSMUITextBox
+    $txtFolder = New-PSTSMUITextBox -Text '\'
+    $txtDesc = New-PSTSMUITextBox
+    Add-PSTSMUIField -Table $tblTask -Label 'Name' -Control $txtName
+    Add-PSTSMUIField -Table $tblTask -Label 'Folder' -Control $txtFolder
+    Add-PSTSMUIField -Table $tblTask -Label 'Description' -Control $txtDesc
+    Add-PSTSMUIStacked -Stack $secTask.Content -Control $tblTask
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secTask.Container
 
     # --- engine ---------------------------------------------------------------------
-    $secEngine = New-PSTaskUISection -Title 'Engine'
-    $tblEngine = New-PSTaskUIFieldTable
+    $secEngine = New-PSTSMUISection -Title 'Engine'
+    $tblEngine = New-PSTSMUIFieldTable
     $cboEngine = New-Object System.Windows.Forms.ComboBox
     $cboEngine.Dock = 'Fill'; $cboEngine.DropDownStyle = 'DropDownList'
-    $engines = @(Get-PSTaskEngine)
+    $engines = @(Get-PSTSMEngine)
     foreach ($e in $engines) { [void]$cboEngine.Items.Add($e.DisplayName) }
-    $txtWorkDir = New-PSTaskUITextBox
-    Add-PSTaskUIField -Table $tblEngine -Label 'Run with' -Control $cboEngine
-    Add-PSTaskUIField -Table $tblEngine -Label 'Start in' -Control $txtWorkDir
-    Add-PSTaskUIStacked -Stack $secEngine.Content -Control $tblEngine
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secEngine.Container
+    $txtWorkDir = New-PSTSMUITextBox
+    Add-PSTSMUIField -Table $tblEngine -Label 'Run with' -Control $cboEngine
+    Add-PSTSMUIField -Table $tblEngine -Label 'Start in' -Control $txtWorkDir
+    Add-PSTSMUIStacked -Stack $secEngine.Content -Control $tblEngine
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secEngine.Container
 
     # --- parameters -----------------------------------------------------------------
-    $secParams = New-PSTaskUISection -Title 'Parameters'
+    $secParams = New-PSTSMUISection -Title 'Parameters'
     $paramHost = New-Object System.Windows.Forms.TableLayoutPanel
     $paramHost.Dock = 'Top'; $paramHost.AutoSize = $true; $paramHost.AutoSizeMode = 'GrowAndShrink'; $paramHost.ColumnCount = 1
-    Add-PSTaskUIStacked -Stack $secParams.Content -Control $paramHost
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secParams.Container
+    Add-PSTSMUIStacked -Stack $secParams.Content -Control $paramHost
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secParams.Container
 
     # --- triggers -------------------------------------------------------------------
-    $secTrig = New-PSTaskUISection -Title 'Schedule'
+    $secTrig = New-PSTSMUISection -Title 'Schedule'
     $lstTrig = New-Object System.Windows.Forms.ListBox
     # Sized in rows of the actual font rather than pixels, so it still shows ~5 triggers at any
     # display scale instead of clipping to two and a half.
@@ -171,19 +173,19 @@ function Show-PSTaskEditor {
     $lstTrig.Dock = 'Top'
     $lstTrig.BorderStyle = 'FixedSingle'
     $lstTrig.IntegralHeight = $false
-    $btnTrigAdd = New-PSTaskUIButton -Text 'Add...' -Width 80
-    $btnTrigEdit = New-PSTaskUIButton -Text 'Edit...' -Width 80
-    $btnTrigDel = New-PSTaskUIButton -Text 'Remove' -Width 80
+    $btnTrigAdd = New-PSTSMUIButton -Text 'Add...' -Width 80
+    $btnTrigEdit = New-PSTSMUIButton -Text 'Edit...' -Width 80
+    $btnTrigDel = New-PSTSMUIButton -Text 'Remove' -Width 80
     $trigBar = New-Object System.Windows.Forms.FlowLayoutPanel
     $trigBar.Dock = 'Top'; $trigBar.AutoSize = $true; $trigBar.WrapContents = $false
     foreach ($b in @($btnTrigAdd, $btnTrigEdit, $btnTrigDel)) { [void]$trigBar.Controls.Add($b) }
-    Add-PSTaskUIStacked -Stack $secTrig.Content -Control $lstTrig
-    Add-PSTaskUIStacked -Stack $secTrig.Content -Control $trigBar
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secTrig.Container
+    Add-PSTSMUIStacked -Stack $secTrig.Content -Control $lstTrig
+    Add-PSTSMUIStacked -Stack $secTrig.Content -Control $trigBar
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secTrig.Container
 
     # --- principal ------------------------------------------------------------------
-    $secWho = New-PSTaskUISection -Title 'Run as'
-    $tblWho = New-PSTaskUIFieldTable
+    $secWho = New-PSTSMUISection -Title 'Run as'
+    $tblWho = New-PSTSMUIFieldTable
     # Two controls, not one. A single list mixed up two orthogonal questions - WHAT KIND of
     # account ("gMSA", "SYSTEM", "a group") and WHEN it runs ("only while logged on") - so
     # half the entries did not answer the label above them.
@@ -259,14 +261,14 @@ function Show-PSTaskEditor {
             $cboWhen.Enabled = $false
         }
     }
-    $txtUser = New-PSTaskUITextBox
+    $txtUser = New-PSTSMUITextBox
     $chkHighest = New-Object System.Windows.Forms.CheckBox
     $chkHighest.Text = 'Run with highest privileges'
     $chkHighest.AutoSize = $true
     # Browse, not "Create gMSA" - picking an account that already exists is the normal case.
     # The picker covers gMSAs, user/service accounts and the built-in principals, sets the
     # matching logon type, and offers creation as a side door for the rarer case.
-    $btnPickAccount = New-PSTaskUIButton -Text 'Browse...' -Width 96
+    $btnPickAccount = New-PSTSMUIButton -Text 'Browse...' -Width 96
     $acctRow = New-Object System.Windows.Forms.TableLayoutPanel
     $acctRow.Dock = 'Top'; $acctRow.AutoSize = $true; $acctRow.ColumnCount = 2; $acctRow.RowCount = 1
     $acctRow.Margin = New-Object System.Windows.Forms.Padding(0)
@@ -275,30 +277,30 @@ function Show-PSTaskEditor {
     $acctRow.Controls.Add($txtUser, 0, 0)
     $acctRow.Controls.Add($btnPickAccount, 1, 0)
 
-    Add-PSTaskUIField -Table $tblWho -Label 'Account type' -Control $cboAccountType
-    Add-PSTaskUIField -Table $tblWho -Label 'Account' -Control $acctRow
-    Add-PSTaskUIField -Table $tblWho -Label 'When' -Control $cboWhen
-    Add-PSTaskUIField -Table $tblWho -Label '' -Control $chkHighest
-    Add-PSTaskUIStacked -Stack $secWho.Content -Control $tblWho
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secWho.Container
+    Add-PSTSMUIField -Table $tblWho -Label 'Account type' -Control $cboAccountType
+    Add-PSTSMUIField -Table $tblWho -Label 'Account' -Control $acctRow
+    Add-PSTSMUIField -Table $tblWho -Label 'When' -Control $cboWhen
+    Add-PSTSMUIField -Table $tblWho -Label '' -Control $chkHighest
+    Add-PSTSMUIStacked -Stack $secWho.Content -Control $tblWho
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secWho.Container
 
     # --- advanced -------------------------------------------------------------------
     $chkAdvanced = New-Object System.Windows.Forms.CheckBox
     $chkAdvanced.Text = 'Show advanced settings'
     $chkAdvanced.AutoSize = $true
     $chkAdvanced.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
-    Add-PSTaskUIStacked -Stack $leftStack -Control $chkAdvanced
+    Add-PSTSMUIStacked -Stack $leftStack -Control $chkAdvanced
 
-    $secAdv = New-PSTaskUISection -Title 'Reliability, logging and engine switches'
+    $secAdv = New-PSTSMUISection -Title 'Reliability, logging and engine switches'
     $secAdv.Container.Visible = $false
-    $tblAdv = New-PSTaskUIFieldTable
+    $tblAdv = New-PSTSMUIFieldTable
 
     $cboInstances = New-Object System.Windows.Forms.ComboBox
     $cboInstances.Dock = 'Fill'; $cboInstances.DropDownStyle = 'DropDownList'
     foreach ($x in @('IgnoreNew', 'Parallel', 'Queue', 'StopExisting')) { [void]$cboInstances.Items.Add($x) }
-    $txtTimeLimit = New-PSTaskUITextBox
-    $txtRestartCount = New-PSTaskUITextBox
-    $txtRestartInterval = New-PSTaskUITextBox
+    $txtTimeLimit = New-PSTSMUITextBox
+    $txtRestartCount = New-PSTSMUITextBox
+    $txtRestartInterval = New-PSTSMUITextBox
     $chkStartWhenAvail = New-Object System.Windows.Forms.CheckBox; $chkStartWhenAvail.Text = 'Run as soon as possible after a missed start'; $chkStartWhenAvail.AutoSize = $true
     $chkBatteryStop = New-Object System.Windows.Forms.CheckBox; $chkBatteryStop.Text = "Don't start on battery power"; $chkBatteryStop.AutoSize = $true
     $chkNetwork = New-Object System.Windows.Forms.CheckBox; $chkNetwork.Text = 'Only run when a network is available'; $chkNetwork.AutoSize = $true
@@ -309,8 +311,8 @@ function Show-PSTaskEditor {
     $cboLogging.Dock = 'Fill'; $cboLogging.DropDownStyle = 'DropDownList'
     [void]$cboLogging.Items.Add('Transcript - wrap the script so each run leaves a log')
     [void]$cboLogging.Items.Add('None - run the script directly')
-    $txtLogDir = New-PSTaskUITextBox
-    $txtLogRetain = New-PSTaskUITextBox
+    $txtLogDir = New-PSTSMUITextBox
+    $txtLogRetain = New-PSTSMUITextBox
 
     $cboExecPolicy = New-Object System.Windows.Forms.ComboBox
     $cboExecPolicy.Dock = 'Fill'; $cboExecPolicy.DropDownStyle = 'DropDownList'
@@ -320,27 +322,27 @@ function Show-PSTaskEditor {
     $cboWindowStyle = New-Object System.Windows.Forms.ComboBox
     $cboWindowStyle.Dock = 'Fill'; $cboWindowStyle.DropDownStyle = 'DropDownList'
     foreach ($x in @('Hidden', 'Minimized', 'Normal', 'Maximized', 'None')) { [void]$cboWindowStyle.Items.Add($x) }
-    $txtExtraArgs = New-PSTaskUITextBox
+    $txtExtraArgs = New-PSTSMUITextBox
 
-    Add-PSTaskUIField -Table $tblAdv -Label 'If already running' -Control $cboInstances
-    Add-PSTaskUIField -Table $tblAdv -Label 'Stop after' -Control $txtTimeLimit
-    Add-PSTaskUIField -Table $tblAdv -Label 'Restart attempts' -Control $txtRestartCount
-    Add-PSTaskUIField -Table $tblAdv -Label 'Restart every' -Control $txtRestartInterval
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkStartWhenAvail
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkBatteryStop
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkNetwork
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkWake
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkHidden
-    Add-PSTaskUIField -Table $tblAdv -Label 'Logging' -Control $cboLogging
-    Add-PSTaskUIField -Table $tblAdv -Label 'Log folder' -Control $txtLogDir
-    Add-PSTaskUIField -Table $tblAdv -Label 'Keep logs (days)' -Control $txtLogRetain
-    Add-PSTaskUIField -Table $tblAdv -Label 'Execution policy' -Control $cboExecPolicy
-    Add-PSTaskUIField -Table $tblAdv -Label 'Window style' -Control $cboWindowStyle
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkNoProfile
-    Add-PSTaskUIField -Table $tblAdv -Label '' -Control $chkNonInteractive
-    Add-PSTaskUIField -Table $tblAdv -Label 'Extra arguments' -Control $txtExtraArgs
-    Add-PSTaskUIStacked -Stack $secAdv.Content -Control $tblAdv
-    Add-PSTaskUIStacked -Stack $leftStack -Control $secAdv.Container
+    Add-PSTSMUIField -Table $tblAdv -Label 'If already running' -Control $cboInstances
+    Add-PSTSMUIField -Table $tblAdv -Label 'Stop after' -Control $txtTimeLimit
+    Add-PSTSMUIField -Table $tblAdv -Label 'Restart attempts' -Control $txtRestartCount
+    Add-PSTSMUIField -Table $tblAdv -Label 'Restart every' -Control $txtRestartInterval
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkStartWhenAvail
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkBatteryStop
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkNetwork
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkWake
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkHidden
+    Add-PSTSMUIField -Table $tblAdv -Label 'Logging' -Control $cboLogging
+    Add-PSTSMUIField -Table $tblAdv -Label 'Log folder' -Control $txtLogDir
+    Add-PSTSMUIField -Table $tblAdv -Label 'Keep logs (days)' -Control $txtLogRetain
+    Add-PSTSMUIField -Table $tblAdv -Label 'Execution policy' -Control $cboExecPolicy
+    Add-PSTSMUIField -Table $tblAdv -Label 'Window style' -Control $cboWindowStyle
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkNoProfile
+    Add-PSTSMUIField -Table $tblAdv -Label '' -Control $chkNonInteractive
+    Add-PSTSMUIField -Table $tblAdv -Label 'Extra arguments' -Control $txtExtraArgs
+    Add-PSTSMUIStacked -Stack $secAdv.Content -Control $tblAdv
+    Add-PSTSMUIStacked -Stack $leftStack -Control $secAdv.Container
 
     [void]$leftScroll.Controls.Add($leftStack)
 
@@ -354,11 +356,11 @@ function Show-PSTaskEditor {
     [void]$rightCol.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$rightCol.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 58)))
 
-    $lblPreview = New-PSTaskUILabel -Text 'What will be registered' -Header
+    $lblPreview = New-PSTSMUILabel -Text 'What will be registered' -Header
     $lblPreview.ForeColor = $t.Accent
-    $txtPreview = New-PSTaskUITextBox -ReadOnly -Multiline -Monospace
+    $txtPreview = New-PSTSMUITextBox -ReadOnly -Multiline -Monospace
 
-    $lblChecks = New-PSTaskUILabel -Text 'Preflight' -Header
+    $lblChecks = New-PSTSMUILabel -Text 'Preflight' -Header
     $lblChecks.ForeColor = $t.Accent
 
     $checkHost = New-Object System.Windows.Forms.TableLayoutPanel
@@ -380,7 +382,7 @@ function Show-PSTaskEditor {
     [void]$lvChecks.Columns.Add('', 10)
     [void]$lvChecks.Columns.Add('Check', 10)
 
-    $txtCheckDetail = New-PSTaskUITextBox -ReadOnly -Multiline
+    $txtCheckDetail = New-PSTSMUITextBox -ReadOnly -Multiline
     $txtCheckDetail.Height = [int]($t.FontBase.Height * 7)
 
     $checkHost.Controls.Add($lvChecks, 0, 0)
@@ -476,9 +478,9 @@ function Show-PSTaskEditor {
         if ($txtUser.Text.Trim()) { $planArgs['UserId'] = $txtUser.Text.Trim() }
         if ($state.Triggers -and $state.Triggers.Count -gt 0) { $planArgs['Trigger'] = $state.Triggers }
 
-        $p = New-PSTaskPlan @planArgs
+        $p = New-PSTSMPlan @planArgs
 
-        # The form is authoritative for parameters. New-PSTaskPlan seeds the script's declared
+        # The form is authoritative for parameters. New-PSTSMPlan seeds the script's declared
         # defaults for scripted callers, but here the controls are already pre-filled with
         # them, so re-seeding would make a deliberately cleared field reappear on the command
         # line with no way to remove it. Clearing a field now means "don't pass it" - the
@@ -519,8 +521,14 @@ function Show-PSTaskEditor {
         if ($state.Suspend) { return }
         $plan = & $buildPlan
         if (-not $plan) {
-            $txtPreview.Text = 'Select a script to begin.'
+            # An empty screen is an invitation to act, not a status report.
+            $txtPreview.Text = 'Choose a .ps1 above.' + [Environment]::NewLine + [Environment]::NewLine +
+            'The engine, parameters, elevation, working directory and description are read from the' + [Environment]::NewLine +
+            'script itself. The exact command that will be registered appears here, and anything that' + [Environment]::NewLine +
+            'would break the task unattended appears below it.'
             $lvChecks.Items.Clear()
+            $lblChecks.Text = 'Preflight'
+            $lblChecks.ForeColor = $t.Accent
             return
         }
 
@@ -543,11 +551,11 @@ function Show-PSTaskEditor {
 
         $lvChecks.BeginUpdate()
         $lvChecks.Items.Clear()
-        $checks = @(Test-PSTaskPlan -Plan $plan)
-        $ordered = $checks | Sort-Object @{ Expression = { (Get-PSTaskUISeverityStyle -Severity $_.Severity).Rank } }
+        $checks = @(Test-PSTSMPlan -Plan $plan)
+        $ordered = $checks | Sort-Object @{ Expression = { (Get-PSTSMUISeverityStyle -Severity $_.Severity).Rank } }
         $errorCount = 0
         foreach ($c in $ordered) {
-            $style = Get-PSTaskUISeverityStyle -Severity $c.Severity
+            $style = Get-PSTSMUISeverityStyle -Severity $c.Severity
             if ($c.Severity -eq 'Error') { $errorCount++ }
             $item = New-Object System.Windows.Forms.ListViewItem($style.Token)
             [void]$item.SubItems.Add($c.Title)
@@ -558,15 +566,31 @@ function Show-PSTaskEditor {
         $lvChecks.EndUpdate()
         & $sizeCheckColumns
 
+        # The button keeps its name. It used to become the status readout - "1 error(s)",
+        # "Cannot save" - which is the wrong job for a control: a button should say what happens
+        # when you press it, and keep saying it through the whole flow. The count belongs to the
+        # thing being counted, so it goes on the Preflight heading instead.
         $btnSave.Enabled = ($errorCount -eq 0) -and (-not $state.Locked)
+
+        $warnCount = @($checks | Where-Object { $_.Severity -eq 'Warning' }).Count
+        $summary = @()
+        if ($errorCount -gt 0) { $summary += "$errorCount error$(if ($errorCount -ne 1) { 's' })" }
+        if ($warnCount -gt 0) { $summary += "$warnCount warning$(if ($warnCount -ne 1) { 's' })" }
+
+        if ($summary.Count -gt 0) { $lblChecks.Text = "Preflight - $($summary -join ', ')" }
+        else { $lblChecks.Text = "Preflight - all clear" }
+        $lblChecks.ForeColor = $(if ($errorCount -gt 0) { $t.Danger } else { $t.Accent })
+
+        # A disabled control with no stated reason is a dead end, so say why in a tooltip.
+        $tipSave = New-Object System.Windows.Forms.ToolTip
         if ($state.Locked) {
-            $btnSave.Text = 'Cannot save'
+            $tipSave.SetToolTip($btnSave, "This task's action was not built by PSTSM and cannot be modelled safely, so saving would rewrite it. Edit it in Task Scheduler instead.")
         }
         elseif ($errorCount -gt 0) {
-            $btnSave.Text = "$errorCount error(s)"
+            $tipSave.SetToolTip($btnSave, "Fix the $errorCount blocking issue$(if ($errorCount -ne 1) { 's' }) listed under Preflight first.")
         }
         else {
-            $btnSave.Text = $(if ($state.IsEdit) { 'Save changes' } else { 'Create task' })
+            $tipSave.SetToolTip($btnSave, '')
         }
     }
 
@@ -576,12 +600,12 @@ function Show-PSTaskEditor {
         $state.ParamControls = [ordered]@{}
 
         if (-not $state.Profile -or -not $state.Profile.HasParameters) {
-            $none = New-PSTaskUILabel -Text 'This script declares no parameters.' -ForeColor $t.Muted
-            Add-PSTaskUIStacked -Stack $paramHost -Control $none
+            $none = New-PSTSMUILabel -Text 'This script declares no parameters.' -ForeColor $t.Muted
+            Add-PSTSMUIStacked -Stack $paramHost -Control $none
             return
         }
 
-        $tbl = New-PSTaskUIFieldTable
+        $tbl = New-PSTSMUIFieldTable
         foreach ($meta in $state.Profile.Parameters) {
             # Two variables on purpose. For most parameters they are the same control, but a
             # path-like parameter is a textbox plus a Browse button inside a panel: the panel
@@ -593,7 +617,7 @@ function Show-PSTaskEditor {
             $valueControl = $null
 
             if ($meta.IsCredential -or $meta.IsSecure) {
-                $box = New-PSTaskUITextBox -ReadOnly
+                $box = New-PSTSMUITextBox -ReadOnly
                 $box.Text = 'Cannot be supplied on a command line - have the script fetch the secret itself, or use a gMSA.'
                 $rowControl = $box
                 $valueControl = $box
@@ -625,8 +649,8 @@ function Show-PSTaskEditor {
                 $panel.Margin = New-Object System.Windows.Forms.Padding(0)
                 [void]$panel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
                 [void]$panel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
-                $inner = New-PSTaskUITextBox
-                $browse = New-PSTaskUIButton -Text '...' -Width 34
+                $inner = New-PSTSMUITextBox
+                $browse = New-PSTSMUIButton -Text '...' -Width 34
                 $browse.Tag = $inner
                 $browse.add_Click({
                         $box = $args[0].Tag
@@ -641,7 +665,7 @@ function Show-PSTaskEditor {
                 $valueControl = $inner
             }
             else {
-                $box = New-PSTaskUITextBox
+                $box = New-PSTSMUITextBox
                 $box.add_TextChanged({ & $refresh })
                 $rowControl = $box
                 $valueControl = $box
@@ -656,7 +680,7 @@ function Show-PSTaskEditor {
             #                               computes it itself at run time; passing it would
             #                               freeze anything time-dependent and hide where the
             #                               value came from. Nothing was executed to work it
-            #                               out - see Resolve-PSTaskDefaultValue.
+            #                               out - see Resolve-PSTSMDefaultValue.
             #   Unresolved                - the source text is shown as the cue, so the operator
             #                               still sees what the script will do.
             if ($meta.HasDefault -and -not $meta.IsSwitch) {
@@ -674,13 +698,13 @@ function Show-PSTaskEditor {
                 }
                 elseif ($valueControl -is [System.Windows.Forms.TextBox] -and -not $valueControl.ReadOnly) {
                     $cue = if ($kind -eq 'Resolved') { [string]$meta.ResolvedDefault.Value } else { [string]$meta.DefaultValue }
-                    if ($cue) { Set-PSTaskUICueBanner -TextBox $valueControl -Text $cue }
+                    if ($cue) { Set-PSTSMUICueBanner -TextBox $valueControl -Text $cue }
                 }
             }
 
             $label = $meta.Name
             if ($meta.IsMandatory) { $label = "$label *" }
-            Add-PSTaskUIField -Table $tbl -Label $label -Control $rowControl
+            Add-PSTSMUIField -Table $tbl -Label $label -Control $rowControl
 
             if ($meta.IsMandatory) {
                 $pos = $tbl.GetPositionFromControl($rowControl)
@@ -706,7 +730,7 @@ function Show-PSTaskEditor {
 
             $state.ParamControls[$meta.Name] = @{ Control = $valueControl; Meta = $meta }
         }
-        Add-PSTaskUIStacked -Stack $paramHost -Control $tbl
+        Add-PSTSMUIStacked -Stack $paramHost -Control $tbl
     }
 
     $refreshTriggers = {
@@ -739,7 +763,7 @@ function Show-PSTaskEditor {
     $loadScript = {
         param($path)
         try {
-            $prof = Get-PSTaskScriptProfile -Path $path
+            $prof = Get-PSTSMScriptProfile -Path $path
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Cannot read script',
@@ -814,7 +838,7 @@ function Show-PSTaskEditor {
     $chkAdvanced.add_CheckedChanged({ $secAdv.Container.Visible = $chkAdvanced.Checked })
 
     $btnTrigAdd.add_Click({
-            $spec = Show-PSTaskTriggerDialog -Owner $form
+            $spec = Show-PSTSMTriggerDialog -Owner $form
             if ($spec) {
                 $state.Triggers = $state.Triggers + $spec
                 & $refreshTriggers
@@ -824,7 +848,7 @@ function Show-PSTaskEditor {
     $btnTrigEdit.add_Click({
             $i = $lstTrig.SelectedIndex
             if ($i -lt 0 -or $i -ge $state.Triggers.Count) { return }
-            $spec = Show-PSTaskTriggerDialog -Trigger $state.Triggers[$i] -Owner $form
+            $spec = Show-PSTSMTriggerDialog -Trigger $state.Triggers[$i] -Owner $form
             if ($spec) {
                 $copy = @($state.Triggers)
                 $copy[$i] = $spec
@@ -868,9 +892,10 @@ function Show-PSTaskEditor {
     }
 
     # --- action bar --------------------------------------------------------------------
-    $btnExport = New-PSTaskUIButton -Text 'Export plan...' -Width 118
-    $btnSave = New-PSTaskUIButton -Text 'Create task' -Primary -Width 130
-    $btnCancel = New-PSTaskUIButton -Text 'Cancel'
+    $btnExport = New-PSTSMUIButton -Text 'Export plan...' -Width 118
+    # Named for what it does, once, and it never changes afterwards.
+    $btnSave = New-PSTSMUIButton -Text $(if ($state.IsEdit) { 'Save changes' } else { 'Create task' }) -Primary -Width 130
+    $btnCancel = New-PSTSMUIButton -Text 'Cancel'
 
     $btnExport.add_Click({
             $plan = & $buildPlan
@@ -880,7 +905,7 @@ function Show-PSTaskEditor {
             $dlg.FileName = "$($plan.TaskName).task.json"
             if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 try {
-                    Export-PSTaskPlan -Plan $plan -Path $dlg.FileName
+                    Export-PSTSMPlan -Plan $plan -Path $dlg.FileName
                     [System.Windows.Forms.MessageBox]::Show("Saved to $($dlg.FileName)", 'Plan exported',
                         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
                 }
@@ -912,10 +937,10 @@ function Show-PSTaskEditor {
 
             try {
                 if ($password) {
-                    Register-PSTaskPlan -Plan $plan -Password $password -Confirm:$false
+                    Register-PSTSMPlan -Plan $plan -Password $password -Confirm:$false
                 }
                 else {
-                    Register-PSTaskPlan -Plan $plan -Confirm:$false
+                    Register-PSTSMPlan -Plan $plan -Confirm:$false
                 }
 
                 if ($renamed) {
@@ -946,7 +971,7 @@ function Show-PSTaskEditor {
             $form.Close()
         })
 
-    $bar = New-PSTaskUIActionBar -LeftButton @($btnExport) -RightButton @($btnCancel, $btnSave)
+    $bar = New-PSTSMUIActionBar -LeftButton @($btnExport) -RightButton @($btnCancel, $btnSave)
 
     $root.Controls.Add($leftScroll, 0, 0)
     $root.Controls.Add($rightCol, 1, 0)
@@ -959,7 +984,7 @@ function Show-PSTaskEditor {
     $cboAccountType.SelectedIndex = 0
     & $applyAccountType
 
-    # Show the account that will actually be used. New-PSTaskPlan falls back to the current user
+    # Show the account that will actually be used. New-PSTSMPlan falls back to the current user
     # when this is blank, so leaving the box empty made the form disagree with its own preview -
     # the preview named an account the form did not show.
     $txtUser.Text = "$env:USERDOMAIN\$env:USERNAME"
@@ -993,7 +1018,7 @@ function Show-PSTaskEditor {
                 default { 'All' }
             }
 
-            $picked = Show-PSTaskAccountPicker -InitialType $initial -Owner $form
+            $picked = Show-PSTSMAccountPicker -InitialType $initial -Owner $form
             if (-not $picked) { return }
 
             $txtUser.Text = $picked.Name
@@ -1105,7 +1130,7 @@ function Show-PSTaskEditor {
     & $refreshTriggers
 
     if ($state.Locked) {
-        $txtPreview.Text = "This task's action was not built by PSTaskBuilder and cannot be modelled safely:" +
+        $txtPreview.Text = "This task's action was not built by PSTSM and cannot be modelled safely:" +
         [Environment]::NewLine + [Environment]::NewLine +
         "  $($Plan.RawAction.Execute) $($Plan.RawAction.Arguments)" +
         [Environment]::NewLine + [Environment]::NewLine +

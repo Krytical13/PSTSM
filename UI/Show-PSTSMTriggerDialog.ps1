@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Show-PSTaskTriggerDialog {
+function Show-PSTSMTriggerDialog {
     <#
     .SYNOPSIS
         Modal dialog for adding or editing a single task trigger.
     .DESCRIPTION
-        Produces a New-PSTaskTriggerSpec object. Fields that do not apply to the selected
+        Produces a New-PSTSMTriggerSpec object. Fields that do not apply to the selected
         trigger type are hidden rather than disabled, so the dialog never shows a weekly
         day-picker on a startup trigger.
 
-        Validation is delegated to New-PSTaskTriggerSpec, so the dialog and the scripted API
+        Validation is delegated to New-PSTSMTriggerSpec, so the dialog and the scripted API
         can never disagree about what is legal.
     .PARAMETER Trigger
         An existing spec to edit. Omit to create a new one.
@@ -20,7 +20,7 @@ function Show-PSTaskTriggerDialog {
     .OUTPUTS
         [pscustomobject] the trigger spec, or $null if cancelled.
     .EXAMPLE
-        $spec = Show-PSTaskTriggerDialog
+        $spec = Show-PSTSMTriggerDialog
     #>
     [CmdletBinding()]
     param(
@@ -29,10 +29,10 @@ function Show-PSTaskTriggerDialog {
         [switch]$SelfTest
     )
 
-    Initialize-PSTaskUIHost
-    $t = Get-PSTaskUITheme
+    Initialize-PSTSMUIHost
+    $t = Get-PSTSMUITheme
 
-    $form = New-PSTaskUIForm -Title $(if ($Trigger) { 'Edit trigger' } else { 'Add trigger' }) -Width 470 -Height 470
+    $form = New-PSTSMUIForm -Title $(if ($Trigger) { 'Edit trigger' } else { 'Add trigger' }) -Width 470 -Height 470
     # Sizable, not FixedDialog: a fixed dialog cannot be resized if the content still overflows
     # at an unusual scale or font size, which leaves the OK button unreachable.
     $form.FormBorderStyle = 'Sizable'
@@ -96,11 +96,11 @@ function Show-PSTaskTriggerDialog {
     $numWeeks = New-Object System.Windows.Forms.NumericUpDown
     $numWeeks.Dock = 'Fill'; $numWeeks.Minimum = 1; $numWeeks.Maximum = 52; $numWeeks.Value = 1
 
-    $txtUser = New-PSTaskUITextBox
-    $txtDelay = New-PSTaskUITextBox
-    $txtRandom = New-PSTaskUITextBox
-    $txtRepInterval = New-PSTaskUITextBox
-    $txtRepDuration = New-PSTaskUITextBox
+    $txtUser = New-PSTSMUITextBox
+    $txtDelay = New-PSTSMUITextBox
+    $txtRandom = New-PSTSMUITextBox
+    $txtRepInterval = New-PSTSMUITextBox
+    $txtRepDuration = New-PSTSMUITextBox
 
     $chkEnabled = New-Object System.Windows.Forms.CheckBox
     $chkEnabled.Text = 'Trigger is enabled'
@@ -108,24 +108,24 @@ function Show-PSTaskTriggerDialog {
     $chkEnabled.Checked = $true
 
     # --- rows, kept as objects so visibility can be toggled by type -----------------
-    $tbl = New-PSTaskUIFieldTable
-    Add-PSTaskUIField -Table $tbl -Label 'Type' -Control $cboType
-    Add-PSTaskUIField -Table $tbl -Label 'Start date' -Control $dtDate
-    Add-PSTaskUIField -Table $tbl -Label 'At time' -Control $dtTime
-    Add-PSTaskUIField -Table $tbl -Label 'Days' -Control $dayPanel
-    Add-PSTaskUIField -Table $tbl -Label 'Every N days' -Control $numDays
-    Add-PSTaskUIField -Table $tbl -Label 'Every N weeks' -Control $numWeeks
-    Add-PSTaskUIField -Table $tbl -Label 'For user' -Control $txtUser
-    Add-PSTaskUIField -Table $tbl -Label 'Delay' -Control $txtDelay
-    Add-PSTaskUIField -Table $tbl -Label 'Random delay' -Control $txtRandom
-    Add-PSTaskUIField -Table $tbl -Label 'Repeat every' -Control $txtRepInterval
-    Add-PSTaskUIField -Table $tbl -Label 'Repeat for' -Control $txtRepDuration
-    Add-PSTaskUIField -Table $tbl -Label '' -Control $chkEnabled
+    $tbl = New-PSTSMUIFieldTable
+    Add-PSTSMUIField -Table $tbl -Label 'Type' -Control $cboType
+    Add-PSTSMUIField -Table $tbl -Label 'Start date' -Control $dtDate
+    Add-PSTSMUIField -Table $tbl -Label 'At time' -Control $dtTime
+    Add-PSTSMUIField -Table $tbl -Label 'Days' -Control $dayPanel
+    Add-PSTSMUIField -Table $tbl -Label 'Every N days' -Control $numDays
+    Add-PSTSMUIField -Table $tbl -Label 'Every N weeks' -Control $numWeeks
+    Add-PSTSMUIField -Table $tbl -Label 'For user' -Control $txtUser
+    Add-PSTSMUIField -Table $tbl -Label 'Delay' -Control $txtDelay
+    Add-PSTSMUIField -Table $tbl -Label 'Random delay' -Control $txtRandom
+    Add-PSTSMUIField -Table $tbl -Label 'Repeat every' -Control $txtRepInterval
+    Add-PSTSMUIField -Table $tbl -Label 'Repeat for' -Control $txtRepDuration
+    Add-PSTSMUIField -Table $tbl -Label '' -Control $chkEnabled
 
-    $hint = New-PSTaskUILabel -Text "Durations are hh:mm:ss (or d.hh:mm:ss). Leave blank for none.`nA random delay spreads load when the same task runs on many machines." -ForeColor $t.Muted
-    Add-PSTaskUIField -Table $tbl -Label '' -Control $hint
+    $hint = New-PSTSMUILabel -Text "Durations are hh:mm:ss (or d.hh:mm:ss). Leave blank for none.`nA random delay spreads load when the same task runs on many machines." -ForeColor $t.Muted
+    Add-PSTSMUIField -Table $tbl -Label '' -Control $hint
 
-    Add-PSTaskUIStacked -Stack $stack -Control $tbl
+    Add-PSTSMUIStacked -Stack $stack -Control $tbl
     [void]$scroll.Controls.Add($stack)
 
     # --- type-driven visibility ------------------------------------------------------
@@ -192,8 +192,8 @@ function Show-PSTaskTriggerDialog {
     # Mutating a reference type reaches the caller's object correctly.
     $dlg = @{ Result = $null }
 
-    $btnOk = New-PSTaskUIButton -Text 'OK' -Primary
-    $btnCancel = New-PSTaskUIButton -Text 'Cancel'
+    $btnOk = New-PSTSMUIButton -Text 'OK' -Primary
+    $btnCancel = New-PSTSMUIButton -Text 'Cancel'
 
     $btnOk.add_Click({
             $type = [string]$cboType.SelectedItem
@@ -221,7 +221,7 @@ function Show-PSTaskTriggerDialog {
             if ($txtRepDuration.Visible -and $txtRepDuration.Text.Trim()) { $p['RepetitionDuration'] = $txtRepDuration.Text.Trim() }
 
             try {
-                $spec = New-PSTaskTriggerSpec @p
+                $spec = New-PSTSMTriggerSpec @p
             }
             catch {
                 [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Invalid trigger',
@@ -239,7 +239,7 @@ function Show-PSTaskTriggerDialog {
             $form.Close()
         })
 
-    $bar = New-PSTaskUIActionBar -RightButton @($btnOk, $btnCancel)
+    $bar = New-PSTSMUIActionBar -RightButton @($btnOk, $btnCancel)
 
     $root.Controls.Add($scroll, 0, 0)
     $root.Controls.Add($bar, 0, 1)

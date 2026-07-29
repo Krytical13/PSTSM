@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #Requires -Modules Pester
 <#
-    UI tests for PSTaskBuilder.
+    UI tests for PSTSM.
 
     WinForms bugs mostly do not show up as exceptions - they show up as a control sized to
     zero, or flung off-screen at a DPI you did not test. So these do three things:
@@ -13,7 +13,7 @@
       3. Actually Show() the windows and pump the message loop with a thread-exception trap.
          DrawToBitmap does not reproduce show-time failures; only a live pump does.
 
-    Run:  Invoke-Pester -Path .\PSTaskBuilder.UI.Tests.ps1
+    Run:  Invoke-Pester -Path .\PSTSM.UI.Tests.ps1
     The live tests need an STA apartment and are skipped automatically under MTA (pwsh's
     default), so run this under powershell.exe or `pwsh -STA` for full coverage.
 #>
@@ -27,10 +27,10 @@ BeforeAll {
     # Without this, an exception inside any WinForms handler reaches the global thread-exception
     # handler, which pops a MODAL message box on the desktop of whoever is at the machine and
     # blocks the run until it is dismissed. That happened while these tests were being written.
-    $env:PSTASKBUILDER_NODIALOG = '1'
+    $env:PSTSM_NODIALOG = '1'
 
     $script:ModuleRoot = Split-Path $PSScriptRoot -Parent
-    Import-Module (Join-Path $script:ModuleRoot 'PSTaskBuilder.psd1') -Force
+    Import-Module (Join-Path $script:ModuleRoot 'PSTSM.psd1') -Force
 
     $script:UIRoot = Join-Path $script:ModuleRoot 'UI'
     $script:UIFiles = @(Get-ChildItem -Path $script:UIRoot -Filter '*.ps1' -Recurse)
@@ -151,7 +151,7 @@ Describe 'UI source lint (Windows PowerShell 5.1 hazards)' {
 Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
     Context 'the editor, with no script selected' {
         BeforeAll {
-            $script:formA = Show-PSTaskEditor -BuildOnly
+            $script:formA = Show-PSTSMEditor -BuildOnly
             Initialize-FormLayout -Form $script:formA
         }
         AfterAll { if ($script:formA) { $script:formA.Dispose() } }
@@ -168,7 +168,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
 
     Context 'the editor, with a script selected' {
         BeforeAll {
-            $script:formB = Show-PSTaskEditor -ScriptPath $script:Fixture -BuildOnly
+            $script:formB = Show-PSTSMEditor -ScriptPath $script:Fixture -BuildOnly
             Initialize-FormLayout -Form $script:formB
             $script:allB = Get-AllControl -Root $script:formB
         }
@@ -201,7 +201,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         }
 
         It 'pre-fills the run-as account so the form agrees with the preview' {
-            # Regression. New-PSTaskPlan falls back to the current user when the box is blank,
+            # Regression. New-PSTSMPlan falls back to the current user when the box is blank,
             # so the preview named an account the form left empty.
             $boxes = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.TextBox] -and -not $_.ReadOnly })
             @($boxes | ForEach-Object { $_.Text }) | Should -Contain "$env:USERDOMAIN\$env:USERNAME"
@@ -245,8 +245,8 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             # Driven by seeding a gMSA plan rather than by changing the combo: a -BuildOnly form
             # has outlived its building function, so poking a control fires a handler whose
             # captured scriptblocks no longer resolve. Seeding exercises the real path anyway.
-            $plan = New-PSTaskPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
-            $f = Show-PSTaskEditor -Plan $plan -BuildOnly
+            $plan = New-PSTSMPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
+            $f = Show-PSTSMEditor -Plan $plan -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 $combos = @(Get-AllControl -Root $f | Where-Object { $_ -is [System.Windows.Forms.ComboBox] })
@@ -268,8 +268,8 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         It 'round-trips a gMSA plan back to the same logon type' {
             # The pair must collapse to exactly what it was split from, or editing a gMSA task
             # and pressing save would silently change its principal.
-            $plan = New-PSTaskPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
-            $f = Show-PSTaskEditor -Plan $plan -BuildOnly
+            $plan = New-PSTSMPlan -ScriptPath $script:Fixture -LogonType 'gMSA' -UserId 'CONTOSO\svc_x$'
+            $f = Show-PSTSMEditor -Plan $plan -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 $preview = @(Get-AllControl -Root $f | Where-Object {
@@ -297,10 +297,22 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             $titles = @($lv[0].Items | ForEach-Object { $_.SubItems[1].Text })
             $titles | Should -Contain 'Mandatory parameters have no value'
         }
-        It 'blocks saving while a preflight error stands' {
-            $save = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -like '*error*' })
+        It 'blocks saving while a preflight error stands, without renaming the button' {
+            # Regression against a copy antipattern: the button used to become the status
+            # readout ("1 error(s)"). A control must say what it does and keep saying it; the
+            # count belongs on the thing being counted.
+            $save = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -eq 'Create task' })
             $save.Count | Should -Be 1
             $save[0].Enabled | Should -BeFalse
+
+            @($script:allB | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -match '(?i)error|cannot save' }) |
+                Should -BeNullOrEmpty
+        }
+
+        It 'puts the preflight counts on the Preflight heading' {
+            $heading = @($script:allB | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -like 'Preflight*' })
+            $heading.Count | Should -Be 1
+            $heading[0].Text | Should -Match '\d+ error'
         }
         It 'places no control at a negative coordinate' {
             $bad = @($script:allB | Where-Object { $_.Left -lt 0 -or $_.Top -lt 0 } |
@@ -311,7 +323,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
 
     Context 'the main window' {
         BeforeAll {
-            $script:formC = Show-PSTaskBuilder -BuildOnly
+            $script:formC = Show-PSTSM -BuildOnly
             Initialize-FormLayout -Form $script:formC
             $script:allC = Get-AllControl -Root $script:formC
         }
@@ -337,7 +349,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
             # $reload no longer resolves. Unguarded, that threw into the global handler and
             # popped a modal error dialog on the desktop. It must now be a quiet no-op.
             $caught = $null
-            $f = Show-PSTaskBuilder -BuildOnly
+            $f = Show-PSTSM -BuildOnly
             try {
                 $f.WindowState = 'Minimized'
                 $f.ShowInTaskbar = $false
@@ -360,7 +372,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         # These tests run at whatever DPI the host reports, then re-run at an inflated font,
         # which reproduces exactly that mismatch without needing a high-DPI machine.
         It 'clips no button or label in the editor at the current font' {
-            $f = Show-PSTaskEditor -ScriptPath $script:Fixture -BuildOnly
+            $f = Show-PSTSMEditor -ScriptPath $script:Fixture -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 Get-ClippedControl -Root $f | Should -BeNullOrEmpty
@@ -369,7 +381,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         }
 
         It 'clips no button or label in the editor at a 150%-sized font' {
-            $f = Show-PSTaskEditor -ScriptPath $script:Fixture -BuildOnly
+            $f = Show-PSTSMEditor -ScriptPath $script:Fixture -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)   # 9pt * 1.5
@@ -380,7 +392,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         }
 
         It 'clips no button or label in the main window at a 150%-sized font' {
-            $f = Show-PSTaskBuilder -BuildOnly
+            $f = Show-PSTSM -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 $f.Font = New-Object System.Drawing.Font('Segoe UI', 13.5)
@@ -393,7 +405,7 @@ Describe 'Headless form construction' -Skip:(-not $script:IsSta) {
         It 'clips nothing in the account picker or the gMSA dialog at a 150%-sized font' {
             # These two carry the most explanatory text, so they are the likeliest to overflow
             # once the font grows.
-            foreach ($build in @({ Show-PSTaskAccountPicker -BuildOnly }, { Show-PSTaskGmsaDialog -BuildOnly })) {
+            foreach ($build in @({ Show-PSTSMAccountPicker -BuildOnly }, { Show-PSTSMGmsaDialog -BuildOnly })) {
                 $f = & $build
                 try {
                     Initialize-FormLayout -Form $f
@@ -424,7 +436,7 @@ param(
 exit 0
 '@ | Set-Content -LiteralPath $rich -Encoding UTF8
 
-            $f = Show-PSTaskEditor -ScriptPath $rich -BuildOnly
+            $f = Show-PSTSMEditor -ScriptPath $rich -BuildOnly
             try {
                 Initialize-FormLayout -Form $f
                 $all = Get-AllControl -Root $f
@@ -447,7 +459,7 @@ exit 0
             # A 1180x780 design becomes 1770x1170 at 150%, which would put the action bar below
             # the bottom edge of a 1080p display.
             $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-            $f = Show-PSTaskEditor -BuildOnly
+            $f = Show-PSTSMEditor -BuildOnly
             try {
                 $f.Width | Should -BeLessOrEqual $screen.Width
                 $f.Height | Should -BeLessOrEqual $screen.Height
@@ -460,7 +472,7 @@ exit 0
         It 'always offers the built-in principals, even with no domain' {
             # A workgroup machine must not get an empty picker - SYSTEM is a valid and often
             # correct answer, and is available without any directory at all.
-            $rows = @(Get-PSTaskRunAsAccount -Type BuiltIn)
+            $rows = @(Get-PSTSMRunAsAccount -Type BuiltIn)
             @($rows | ForEach-Object { $_.Name }) | Should -Contain 'SYSTEM'
             ($rows | Where-Object Name -eq 'SYSTEM').SuggestedLogonType | Should -Be 'ServiceAccount'
         }
@@ -468,13 +480,13 @@ exit 0
         It 'pairs every account with the logon type it needs' {
             # Account and logon type are one decision; a row that did not carry its own type
             # would let the editor set a gMSA with LogonType S4U, which cannot register.
-            foreach ($r in @(Get-PSTaskRunAsAccount)) {
+            foreach ($r in @(Get-PSTSMRunAsAccount)) {
                 $r.SuggestedLogonType | Should -BeIn @('gMSA', 'Password', 'ServiceAccount', 'S4U')
             }
         }
 
         It 'reports gMSA prerequisites without hanging when there is no domain' {
-            $checks = @(Test-PSTaskGmsaPrerequisite)
+            $checks = @(Test-PSTSMGmsaPrerequisite)
             $checks.Count | Should -BeGreaterThan 0
             @($checks | ForEach-Object { $_.Severity }) | Should -Not -Contain $null
         }
@@ -482,27 +494,27 @@ exit 0
         It 'explains what the KDS root key is, not just that it is missing' {
             # The whole point of the guided flow: an admin who has never used gMSAs should
             # learn why this exists rather than be handed a command to paste.
-            $checks = @(Test-PSTaskGmsaPrerequisite)
+            $checks = @(Test-PSTSMGmsaPrerequisite)
             $kds = $checks | Where-Object Id -in 'GMSAPRE_NOKDSKEY', 'GMSAPRE_KDS_OK', 'GMSAPRE_KDS_PENDING', 'GMSAPRE_NODC'
             $kds | Should -Not -BeNullOrEmpty
         }
 
         It 'refuses to guess a gMSA name that cannot fit in a sAMAccountName' {
-            { New-PSTaskGmsa -Name 'this_name_is_far_too_long' `
+            { New-PSTSMGmsa -Name 'this_name_is_far_too_long' `
                     -PrincipalsAllowedToRetrieveManagedPassword 'grp' -WhatIf } |
                 Should -Throw '*cannot exceed 15 characters*'
         }
 
         It 'builds the picker and the gMSA dialog without a domain' {
-            { $null = Show-PSTaskAccountPicker -SelfTest } | Should -Not -Throw
-            { $null = Show-PSTaskGmsaDialog -SelfTest } | Should -Not -Throw
+            { $null = Show-PSTSMAccountPicker -SelfTest } | Should -Not -Throw
+            { $null = Show-PSTSMGmsaDialog -SelfTest } | Should -Not -Throw
         }
     }
 
     Context 'the trigger dialog' {
         It 'validates through the engine rather than its own rules' {
-            { New-PSTaskTriggerSpec -Type Weekly -At '07:00' } | Should -Throw '*DaysOfWeek*'
-            (New-PSTaskTriggerSpec -Type Daily -At '07:00').Type | Should -Be 'Daily'
+            { New-PSTSMTriggerSpec -Type Weekly -At '07:00' } | Should -Throw '*DaysOfWeek*'
+            (New-PSTSMTriggerSpec -Type Daily -At '07:00').Type | Should -Be 'Daily'
         }
 
         It 'returns the trigger the OK handler built' {
@@ -510,7 +522,7 @@ exit 0
             # a bare $result inside the Click handler, which creates it in the HANDLER's scope
             # and leaves the caller's variable untouched - so the dialog always returned $null
             # and "Add trigger" silently did nothing. Only driving the real handler catches it.
-            $spec = Show-PSTaskTriggerDialog -SelfTest
+            $spec = Show-PSTSMTriggerDialog -SelfTest
             $spec | Should -Not -BeNullOrEmpty
             $spec.Type | Should -Be 'Daily'
             $spec.At | Should -BeLike '*T07:00:00'
@@ -521,28 +533,28 @@ exit 0
 
 Describe 'Host initialisation' -Skip:(-not $script:IsSta) {
     It 'can be initialised again after a window already exists' {
-        # Regression, seen in the console on a second launch: Start-PSTaskBuilder.ps1 does
+        # Regression, seen in the console on a second launch: Start-PSTSM.ps1 does
         # Import-Module -Force, which resets module scope, so the old $script: guard did not
         # hold. SetCompatibleTextRenderingDefault then threw "must be called before the first
         # IWin32Window object is created". The guard now lives on the AppDomain, and the call
         # itself is wrapped because losing it is only cosmetic.
-        Initialize-PSTaskUIHost
+        Initialize-PSTSMUIHost
         $probe = New-Object System.Windows.Forms.Form
         $null = $probe.Handle          # guarantee a window exists in this process
         try {
             # Clear the flag to force the body to run again, exactly as a -Force re-import does.
-            [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $null)
-            { Initialize-PSTaskUIHost } | Should -Not -Throw
+            [System.AppDomain]::CurrentDomain.SetData('PSTSMUIHostReady', $null)
+            { Initialize-PSTSMUIHost } | Should -Not -Throw
         }
         finally {
             $probe.Dispose()
-            [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $true)
+            [System.AppDomain]::CurrentDomain.SetData('PSTSMUIHostReady', $true)
         }
     }
 
     It 'is a no-op once already initialised' {
-        Initialize-PSTaskUIHost
-        { Initialize-PSTaskUIHost } | Should -Not -Throw
+        Initialize-PSTSMUIHost
+        { Initialize-PSTSMUIHost } | Should -Not -Throw
     }
 }
 
@@ -572,15 +584,15 @@ Describe 'Live show-and-pump smoke test' -Skip:(-not $script:IsSta) {
         # DrawToBitmap renders chrome only and misses show-time failures; a real Show() plus a
         # DoEvents pump is what catches them.
         $fixture = $script:Fixture
-        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTaskEditor -ScriptPath $fixture -SelfTest }
+        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTSMEditor -ScriptPath $fixture -SelfTest }
         if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
         $caught.Count | Should -Be 0
     }
 
     It 'shows the main window, loads the real task list, and pumps without a thread exception' {
-        # This one also exercises Get-PSTaskInventory against the machine's real tasks via the
+        # This one also exercises Get-PSTSMInventory against the machine's real tasks via the
         # add_Shown handler, so a bad row breaks the test rather than the user's first launch.
-        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTaskBuilder -SelfTest }
+        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTSM -SelfTest }
         if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
         $caught.Count | Should -Be 0
     }

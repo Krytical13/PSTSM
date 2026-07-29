@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Get-PSTaskRunAsAccount {
+function Get-PSTSMRunAsAccount {
     <#
     .SYNOPSIS
         Lists accounts a task could run as - gMSAs, ordinary/service user accounts, and the
@@ -29,9 +29,9 @@ function Get-PSTaskRunAsAccount {
         [pscustomobject] Name, DisplayName, Type, SuggestedLogonType, Description, Enabled,
         UsableHere, Detail
     .EXAMPLE
-        Get-PSTaskRunAsAccount -Type gMSA
+        Get-PSTSMRunAsAccount -Type gMSA
     .EXAMPLE
-        Get-PSTaskRunAsAccount -Type User -Filter 'svc'
+        Get-PSTSMRunAsAccount -Type User -Filter 'svc'
     #>
     [CmdletBinding()]
     param(
@@ -50,7 +50,7 @@ function Get-PSTaskRunAsAccount {
 
     function New-RunAsAccount($name, $display, $kind, $logon, $description, $enabled, $usable, $detail) {
         [PSCustomObject]@{
-            PSTypeName         = 'PSTaskBuilder.RunAsAccount'
+            PSTypeName         = 'PSTSM.RunAsAccount'
             Name               = $name
             DisplayName        = $display
             Type               = $kind

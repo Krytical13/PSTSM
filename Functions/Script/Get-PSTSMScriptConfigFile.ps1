@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Get-PSTaskScriptConfigFile {
+function Get-PSTSMScriptConfigFile {
     <#
     .SYNOPSIS
         Finds the settings file a script reads alongside itself, and reports whether it is
@@ -17,7 +17,7 @@ function Get-PSTaskScriptConfigFile {
 
         Detection is deliberately conservative. A parameter is treated as a config reference
         only when its NAME looks like one and its default RESOLVES to a real path through
-        Resolve-PSTaskDefaultValue - which never executes anything.
+        Resolve-PSTSMDefaultValue - which never executes anything.
 
         Content is read only for formats that can be parsed without running code:
         Import-PowerShellDataFile refuses anything with a dynamic expression in it, and
@@ -25,11 +25,11 @@ function Get-PSTaskScriptConfigFile {
         it is the file they think it is. Nothing is interpreted, because the tool cannot know
         what any of those keys mean.
     .PARAMETER ScriptProfile
-        Output of Get-PSTaskScriptProfile.
+        Output of Get-PSTSMScriptProfile.
     .OUTPUTS
         [pscustomobject] ParameterName, Path, Exists, Format, Parses, Keys, ParseError
     .EXAMPLE
-        Get-PSTaskScriptConfigFile -ScriptProfile (Get-PSTaskScriptProfile -Path .\Run.ps1)
+        Get-PSTSMScriptConfigFile -ScriptProfile (Get-PSTSMScriptProfile -Path .\Run.ps1)
     #>
     [CmdletBinding()]
     param(
@@ -90,7 +90,7 @@ function Get-PSTaskScriptConfigFile {
         }
 
         $out.Add([PSCustomObject]@{
-                PSTypeName    = 'PSTaskBuilder.ConfigFile'
+                PSTypeName    = 'PSTSM.ConfigFile'
                 ParameterName = $p.Name
                 Path          = $path
                 Exists        = $exists

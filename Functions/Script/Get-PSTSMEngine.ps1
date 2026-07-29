@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Get-PSTaskEngine {
+function Get-PSTSMEngine {
     <#
     .SYNOPSIS
         Enumerates the PowerShell engines installed on this machine that a scheduled task
@@ -22,7 +22,7 @@ function Get-PSTaskEngine {
     .OUTPUTS
         [pscustomobject] Id, DisplayName, Path, Version, Edition, Bitness, IsDefault
     .EXAMPLE
-        Get-PSTaskEngine | Format-Table DisplayName, Path, Version
+        Get-PSTSMEngine | Format-Table DisplayName, Path, Version
     #>
     [CmdletBinding()]
     param(
@@ -90,7 +90,7 @@ function Get-PSTaskEngine {
 
     # --- Default ----------------------------------------------------------------------
     # Highest-version 64-bit pwsh if present, else 64-bit Windows PowerShell. This is only a
-    # starting point for the UI; Get-PSTaskScriptProfile overrides it when the script says so.
+    # starting point for the UI; Get-PSTSMScriptProfile overrides it when the script says so.
     $preferred =
     @($engines | Where-Object { $_.Id -eq 'pwsh' -and $_.Bitness -eq 'x64' } |
         Sort-Object { try { [version]$_.Version } catch { [version]'0.0' } } -Descending |

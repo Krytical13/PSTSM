@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Export-PSTaskPlan {
+function Export-PSTSMPlan {
     <#
     .SYNOPSIS
         Writes a task plan to JSON so it can be reviewed, committed, and applied elsewhere.
@@ -20,7 +20,7 @@ function Export-PSTaskPlan {
     .OUTPUTS
         [System.IO.FileInfo] when -PassThru is used.
     .EXAMPLE
-        Export-PSTaskPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
+        Export-PSTSMPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -38,7 +38,7 @@ function Export-PSTaskPlan {
         # what this plan produces, but it is never read back on import.
         $export = [ordered]@{
             SchemaVersion    = $Plan.SchemaVersion
-            ExportedBy       = 'PSTaskBuilder'
+            ExportedBy       = 'PSTSM'
             ExportedOn       = (Get-Date).ToString('o')
 
             TaskName         = $Plan.TaskName
@@ -81,7 +81,7 @@ function Export-PSTaskPlan {
     }
 }
 
-function Import-PSTaskPlan {
+function Import-PSTSMPlan {
     <#
     .SYNOPSIS
         Reads a task plan back from JSON into the object shape the rest of the module expects.
@@ -89,7 +89,7 @@ function Import-PSTaskPlan {
         ConvertFrom-Json produces PSCustomObjects, but the plan's Parameters, Settings,
         Principal and Logging blocks are dictionaries that downstream code enumerates by key.
         This converts them back so an imported plan behaves exactly like one from
-        New-PSTaskPlan - including the computed ArgumentString.
+        New-PSTSMPlan - including the computed ArgumentString.
 
         EnginePath is re-resolved against the local machine by default, because a plan built on
         a box with PowerShell 7.4 must still register on one with 7.2.
@@ -98,9 +98,9 @@ function Import-PSTaskPlan {
     .PARAMETER KeepEnginePath
         Trust the EnginePath recorded in the file instead of re-resolving it locally.
     .OUTPUTS
-        [pscustomobject] PSTaskBuilder.TaskPlan
+        [pscustomobject] PSTSM.TaskPlan
     .EXAMPLE
-        Import-PSTaskPlan -Path .\Plans\NightlyReport.task.json | Register-PSTaskPlan
+        Import-PSTSMPlan -Path .\Plans\NightlyReport.task.json | Register-PSTSMPlan
     #>
     [CmdletBinding()]
     param(
@@ -121,7 +121,7 @@ function Import-PSTaskPlan {
             Write-Warning "Plan declares schema version $($raw.SchemaVersion); this module understands 1. Unknown fields will be ignored."
         }
 
-        function ConvertTo-PSTaskOrderedDictionary($obj) {
+        function ConvertTo-PSTSMOrderedDictionary($obj) {
             $d = [ordered]@{}
             if ($null -eq $obj) { return $d }
             foreach ($p in $obj.PSObject.Properties) { $d[$p.Name] = $p.Value }
@@ -130,7 +130,7 @@ function Import-PSTaskPlan {
 
         $enginePath = $raw.EnginePath
         if (-not $KeepEnginePath) {
-            $candidates = @(Get-PSTaskEngine -Id $raw.EngineId)
+            $candidates = @(Get-PSTSMEngine -Id $raw.EngineId)
             $pick = @($candidates | Where-Object { $_.Bitness -eq 'x64' } | Select-Object -First 1)
             if (-not $pick) { $pick = @($candidates | Select-Object -First 1) }
             if ($pick) {
@@ -148,12 +148,12 @@ function Import-PSTaskPlan {
         $triggers = @()
         foreach ($t in @($raw.Triggers)) {
             if ($null -eq $t) { continue }
-            $t.PSObject.TypeNames.Insert(0, 'PSTaskBuilder.TriggerSpec')
+            $t.PSObject.TypeNames.Insert(0, 'PSTSM.TriggerSpec')
             $triggers += $t
         }
 
         $plan = [PSCustomObject]@{
-            PSTypeName       = 'PSTaskBuilder.TaskPlan'
+            PSTypeName       = 'PSTSM.TaskPlan'
             SchemaVersion    = if ($raw.SchemaVersion) { [int]$raw.SchemaVersion } else { 1 }
 
             TaskName         = $raw.TaskName
@@ -165,7 +165,7 @@ function Import-PSTaskPlan {
             EnginePath       = $enginePath
             WorkingDirectory = $raw.WorkingDirectory
 
-            Parameters       = (ConvertTo-PSTaskOrderedDictionary $raw.Parameters)
+            Parameters       = (ConvertTo-PSTSMOrderedDictionary $raw.Parameters)
             ExtraArguments   = $raw.ExtraArguments
 
             NoProfile        = [bool]$raw.NoProfile
@@ -174,9 +174,9 @@ function Import-PSTaskPlan {
             WindowStyle      = $raw.WindowStyle
 
             Triggers         = $triggers
-            Principal        = (ConvertTo-PSTaskOrderedDictionary $raw.Principal)
-            Settings         = (ConvertTo-PSTaskOrderedDictionary $raw.Settings)
-            Logging          = (ConvertTo-PSTaskOrderedDictionary $raw.Logging)
+            Principal        = (ConvertTo-PSTSMOrderedDictionary $raw.Principal)
+            Settings         = (ConvertTo-PSTSMOrderedDictionary $raw.Settings)
+            Logging          = (ConvertTo-PSTSMOrderedDictionary $raw.Logging)
 
             Source           = [ordered]@{
                 EngineConfidence = 'Imported'
@@ -186,7 +186,7 @@ function Import-PSTaskPlan {
         }
 
         $plan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value {
-            ConvertTo-PSTaskArgument -ScriptPath $this.ScriptPath `
+            ConvertTo-PSTSMArgument -ScriptPath $this.ScriptPath `
                 -Parameters $this.Parameters `
                 -ExtraArguments $this.ExtraArguments `
                 -ExecutionPolicy $this.ExecutionPolicy `

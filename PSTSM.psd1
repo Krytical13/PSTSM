@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 @{
-    RootModule        = 'PSTaskBuilder.psm1'
+    RootModule        = 'PSTSM.psm1'
     ModuleVersion     = '0.3.0'
     GUID              = 'c9e4a7f2-58b1-4d36-9a0e-7b2c15d8e034'
     Author            = 'Krytical13'
@@ -19,46 +19,46 @@
 
     FunctionsToExport = @(
         # Script analysis - the "select the script and the form fills itself in" half
-        'Get-PSTaskEngine'
-        'Get-PSTaskScriptProfile'
-        'Resolve-PSTaskDefaultValue'
-        'Get-PSTaskScriptConfigFile'
+        'Get-PSTSMEngine'
+        'Get-PSTSMScriptProfile'
+        'Resolve-PSTSMDefaultValue'
+        'Get-PSTSMScriptConfigFile'
 
         # Plan construction and validation
-        'New-PSTaskPlan'
-        'New-PSTaskTriggerSpec'
-        'Test-PSTaskPlan'
-        'ConvertTo-PSTaskArgument'
-        'ConvertTo-PSTaskQuotedValue'
-        'Export-PSTaskPlan'
-        'Import-PSTaskPlan'
+        'New-PSTSMPlan'
+        'New-PSTSMTriggerSpec'
+        'Test-PSTSMPlan'
+        'ConvertTo-PSTSMArgument'
+        'ConvertTo-PSTSMQuotedValue'
+        'Export-PSTSMPlan'
+        'Import-PSTSMPlan'
 
         # Task Scheduler round trip - the browse-and-edit half
-        'Get-PSTaskInventory'
-        'Register-PSTaskPlan'
-        'New-PSTaskLogWrapper'
-        'ConvertTo-PSTaskCimTrigger'
-        'ConvertFrom-PSTaskAction'
-        'ConvertFrom-PSTaskDefinition'
-        'ConvertFrom-PSTaskCimTrigger'
-        'ConvertFrom-PSTaskDuration'
-        'ConvertFrom-PSTaskResultCode'
-        'ConvertFrom-PSTaskTriggerSummary'
+        'Get-PSTSMInventory'
+        'Register-PSTSMPlan'
+        'New-PSTSMLogWrapper'
+        'ConvertTo-PSTSMCimTrigger'
+        'ConvertFrom-PSTSMAction'
+        'ConvertFrom-PSTSMDefinition'
+        'ConvertFrom-PSTSMCimTrigger'
+        'ConvertFrom-PSTSMDuration'
+        'ConvertFrom-PSTSMResultCode'
+        'ConvertFrom-PSTSMTriggerSummary'
 
         # Accounts: pick an existing one, or bridge the scattered steps of creating a gMSA
-        'Get-PSTaskRunAsAccount'
-        'Test-PSTaskGmsaPrerequisite'
-        'New-PSTaskGmsa'
-        'Install-PSTaskGmsa'
-        'Grant-PSTaskBatchLogonRight'
+        'Get-PSTSMRunAsAccount'
+        'Test-PSTSMGmsaPrerequisite'
+        'New-PSTSMGmsa'
+        'Install-PSTSMGmsa'
+        'Grant-PSTSMBatchLogonRight'
 
         # WinForms front end
-        'Show-PSTaskBuilder'
-        'Show-PSTaskEditor'
-        'Show-PSTaskTriggerDialog'
-        'Show-PSTaskGmsaDialog'
-        'Show-PSTaskAccountPicker'
-        'Initialize-PSTaskUIHost'
+        'Show-PSTSM'
+        'Show-PSTSMEditor'
+        'Show-PSTSMTriggerDialog'
+        'Show-PSTSMGmsaDialog'
+        'Show-PSTSMAccountPicker'
+        'Initialize-PSTSMUIHost'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()
@@ -71,7 +71,7 @@
             # Required by the PowerShell Gallery, and what GitHub reads for the licence badge.
             # Update ProjectUri if the public repository ends up under a different name.
             LicenseUri   = 'https://www.gnu.org/licenses/gpl-3.0.html'
-            ProjectUri   = 'https://github.com/Krytical13/PSTaskBuilder'
+            ProjectUri   = 'https://github.com/Krytical13/PSTSM'
 
             # Must stay a single constant expression. String concatenation with '+' here makes
             # the manifest a "dynamic expression" that Import-PowerShellDataFile refuses to read.
@@ -84,7 +84,7 @@ which S4U also cannot do.
 
 0.2.0 - Adds the WinForms front end: task list with live filtering, the create/edit window
 with a parameter form generated from the script's own param() block, a live command preview,
-inline preflight, and round-trip editing of existing tasks. Start-PSTaskBuilder.ps1 handles
+inline preflight, and round-trip editing of existing tasks. Start-PSTSM.ps1 handles
 the STA relaunch pwsh needs.
 
 0.1.0 - Engine only. AST-derived script profile (engine, parameters, elevation, help,

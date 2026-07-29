@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Get-PSTaskInventory {
+function Get-PSTSMInventory {
     <#
     .SYNOPSIS
         Lists registered scheduled tasks with the PowerShell-specific detail the built-in
@@ -25,7 +25,7 @@ function Get-PSTaskInventory {
     .OUTPUTS
         [pscustomobject]
     .EXAMPLE
-        Get-PSTaskInventory -PowerShellOnly | Format-Table TaskName, State, LastRunTime, LastResultText, ScriptName
+        Get-PSTSMInventory -PowerShellOnly | Format-Table TaskName, State, LastRunTime, LastResultText, ScriptName
     #>
     [CmdletBinding()]
     param(
@@ -49,7 +49,7 @@ function Get-PSTaskInventory {
 
         $parsed = $null
         if ($action -and $action.PSObject.Properties['Execute']) {
-            $parsed = ConvertFrom-PSTaskAction -Execute $action.Execute `
+            $parsed = ConvertFrom-PSTSMAction -Execute $action.Execute `
                 -Arguments $action.Arguments `
                 -WorkingDirectory $action.WorkingDirectory
         }
@@ -63,7 +63,7 @@ function Get-PSTaskInventory {
         $principal = $task.Principal
 
         [PSCustomObject]@{
-            PSTypeName       = 'PSTaskBuilder.TaskSummary'
+            PSTypeName       = 'PSTSM.TaskSummary'
 
             TaskName         = $task.TaskName
             TaskPath         = $task.TaskPath
@@ -76,7 +76,7 @@ function Get-PSTaskInventory {
             # Runtime
             LastRunTime      = if ($info) { $info.LastRunTime } else { $null }
             LastTaskResult   = if ($info) { $info.LastTaskResult } else { $null }
-            LastResultText   = if ($info) { ConvertFrom-PSTaskResultCode -Code $info.LastTaskResult } else { $null }
+            LastResultText   = if ($info) { ConvertFrom-PSTSMResultCode -Code $info.LastTaskResult } else { $null }
             NextRunTime      = if ($info) { $info.NextRunTime } else { $null }
             NumberOfMissed   = if ($info) { $info.NumberOfMissedRuns } else { $null }
 
@@ -98,9 +98,9 @@ function Get-PSTaskInventory {
             Arguments        = if ($action) { $action.Arguments } else { $null }
 
             # True when the action points at a wrapper this tool generated.
-            IsManagedByTool  = [bool]($parsed -and $parsed.ScriptPath -and $parsed.ScriptPath -match '\\\.pstask\\.+\.wrapper\.ps1$')
+            IsManagedByTool  = [bool]($parsed -and $parsed.ScriptPath -and $parsed.ScriptPath -match '\\\.pstsm\\.+\.wrapper\.ps1$')
 
-            TriggerSummary   = (ConvertFrom-PSTaskTriggerSummary -Triggers $task.Triggers)
+            TriggerSummary   = (ConvertFrom-PSTSMTriggerSummary -Triggers $task.Triggers)
             TriggerCount     = @($task.Triggers).Count
             ActionCount      = @($task.Actions).Count
 
@@ -110,7 +110,7 @@ function Get-PSTaskInventory {
     }
 }
 
-function ConvertFrom-PSTaskResultCode {
+function ConvertFrom-PSTSMResultCode {
     <#
     .SYNOPSIS
         Turns a Task Scheduler Last Run Result code into something readable.
@@ -152,7 +152,7 @@ function ConvertFrom-PSTaskResultCode {
     }
 }
 
-function ConvertFrom-PSTaskTriggerSummary {
+function ConvertFrom-PSTSMTriggerSummary {
     <#
     .SYNOPSIS
         Renders a task's triggers as one short human-readable line for the list view.
@@ -213,7 +213,7 @@ function ConvertFrom-PSTaskTriggerSummary {
     $repeating = @($Triggers | Where-Object { $_.Repetition -and $_.Repetition.Interval })
     if ($repeating.Count -gt 0) {
         # Task Scheduler stores ISO 8601 durations; 'P1D' is not readable as 'repeat P1D'.
-        $iv = ConvertFrom-PSTaskDuration -Value $repeating[0].Repetition.Interval
+        $iv = ConvertFrom-PSTSMDuration -Value $repeating[0].Repetition.Interval
         if ($iv) { $line += " (repeat $iv)" }
     }
     $line

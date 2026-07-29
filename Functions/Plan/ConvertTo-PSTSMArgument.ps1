@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function ConvertTo-PSTaskArgument {
+function ConvertTo-PSTSMArgument {
     <#
     .SYNOPSIS
         Builds the exact argument string Task Scheduler will hand to powershell.exe / pwsh.exe.
@@ -27,7 +27,7 @@ function ConvertTo-PSTaskArgument {
     .PARAMETER Parameters
         Ordered dictionary of parameter name -> value. $null values are omitted.
     .PARAMETER ScriptProfile
-        Optional Get-PSTaskScriptProfile output. Used only so a switch that defaults to $true
+        Optional Get-PSTSMScriptProfile output. Used only so a switch that defaults to $true
         in the script but is set to $false here emits -Name:$false instead of being dropped.
     .PARAMETER ExtraArguments
         Free-text appended verbatim after the generated parameters. Escape hatch for anything
@@ -44,14 +44,14 @@ function ConvertTo-PSTaskArgument {
     .OUTPUTS
         [string]
     .EXAMPLE
-        ConvertTo-PSTaskArgument -ScriptPath 'D:\Scripts\Send-Mail.ps1' `
+        ConvertTo-PSTSMArgument -ScriptPath 'D:\Scripts\Send-Mail.ps1' `
                                  -Parameters ([ordered]@{ SmtpServer = 'mail.contoso.com'; DaysOut = 14; TestMode = $true })
 
         -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "D:\Scripts\Send-Mail.ps1" -SmtpServer mail.contoso.com -DaysOut 14 -TestMode
 
         Only values that need quoting get quoted, so the preview stays readable.
     .EXAMPLE
-        ConvertTo-PSTaskArgument -ScriptPath 'C:\My Scripts\Run.ps1' `
+        ConvertTo-PSTSMArgument -ScriptPath 'C:\My Scripts\Run.ps1' `
                                  -Parameters ([ordered]@{ OutDir = 'C:\Logs\'; Note = 'said "hi"' })
 
         ... -File "C:\My Scripts\Run.ps1" -OutDir "C:\Logs\\" -Note "said \"hi\""
@@ -89,7 +89,7 @@ function ConvertTo-PSTaskArgument {
     if ($WindowStyle -ne 'None') { $parts.Add("-WindowStyle $WindowStyle") }
 
     # -File last: everything after it is the script's.
-    $parts.Add("-File $(ConvertTo-PSTaskQuotedValue -Value $ScriptPath -AlwaysQuote)")
+    $parts.Add("-File $(ConvertTo-PSTSMQuotedValue -Value $ScriptPath -AlwaysQuote)")
 
     if ($Parameters) {
         # Look up declared switch defaults once so we know when $false must be explicit.
@@ -121,13 +121,13 @@ function ConvertTo-PSTaskArgument {
 
             # --- arrays ---
             if ($value -is [array] -or ($value -is [System.Collections.IEnumerable] -and $value -isnot [string])) {
-                $items = @($value | Where-Object { $null -ne $_ } | ForEach-Object { ConvertTo-PSTaskQuotedValue -Value $_ })
+                $items = @($value | Where-Object { $null -ne $_ } | ForEach-Object { ConvertTo-PSTSMQuotedValue -Value $_ })
                 if ($items.Count -eq 0) { continue }
                 $parts.Add("-$key $($items -join ',')")
                 continue
             }
 
-            $parts.Add("-$key $(ConvertTo-PSTaskQuotedValue -Value $value)")
+            $parts.Add("-$key $(ConvertTo-PSTSMQuotedValue -Value $value)")
         }
     }
 
@@ -138,7 +138,7 @@ function ConvertTo-PSTaskArgument {
     $parts -join ' '
 }
 
-function ConvertTo-PSTaskQuotedValue {
+function ConvertTo-PSTSMQuotedValue {
     <#
     .SYNOPSIS
         Quotes a single command-line value using the rules CreateProcess/CommandLineToArgvW

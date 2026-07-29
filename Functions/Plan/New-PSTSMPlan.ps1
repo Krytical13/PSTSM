@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function New-PSTaskPlan {
+function New-PSTSMPlan {
     <#
     .SYNOPSIS
         Produces a complete, serialisable scheduled-task plan from a script path, filling in
         every field that can be derived and leaving the rest at defaults that work.
     .DESCRIPTION
-        The plan is the single object the UI binds to, Test-PSTaskPlan validates,
-        Register-PSTaskPlan applies, and Export-PSTaskPlan writes to JSON. Nothing downstream
+        The plan is the single object the UI binds to, Test-PSTSMPlan validates,
+        Register-PSTSMPlan applies, and Export-PSTSMPlan writes to JSON. Nothing downstream
         reads the script again.
 
         Defaults are chosen to be right for the common case rather than to mirror Task
@@ -21,12 +21,12 @@ function New-PSTaskPlan {
                                           any laptop, which is a classic "why didn't it run".
 
         The default principal is S4U ('run whether logged on or not', no stored password).
-        That is the usual intent, but it holds no network credentials - Test-PSTaskPlan raises
+        That is the usual intent, but it holds no network credentials - Test-PSTSMPlan raises
         that specifically when the script's signals show outbound calls.
     .PARAMETER ScriptPath
         Path to the .ps1 the task will run.
     .PARAMETER ScriptProfile
-        Pre-computed Get-PSTaskScriptProfile output. Supply it to avoid re-parsing.
+        Pre-computed Get-PSTSMScriptProfile output. Supply it to avoid re-parsing.
     .PARAMETER TaskName
         Defaults to the script's base name.
     .PARAMETER TaskPath
@@ -46,7 +46,7 @@ function New-PSTaskPlan {
         Defaults to the script's own folder, so relative paths inside the script resolve the
         way they do when you run it by hand.
     .PARAMETER Trigger
-        One or more New-PSTaskTriggerSpec objects.
+        One or more New-PSTSMTriggerSpec objects.
     .PARAMETER UserId
         Account to run as. Defaults to the current user.
     .PARAMETER LogonType
@@ -64,14 +64,14 @@ function New-PSTaskPlan {
     .PARAMETER Logging
         Hashtable overriding logging: Mode ('Transcript' or 'None'), Directory, RetentionDays.
     .OUTPUTS
-        [pscustomobject] PSTaskBuilder.TaskPlan
+        [pscustomobject] PSTSM.TaskPlan
     .EXAMPLE
-        $plan = New-PSTaskPlan -ScriptPath .\Send-UserPassExpMail.ps1 `
+        $plan = New-PSTSMPlan -ScriptPath .\Send-UserPassExpMail.ps1 `
                                -Parameters ([ordered]@{ DaysOut = 14 }) `
-                               -Trigger (New-PSTaskTriggerSpec -Type Daily -At '07:00')
+                               -Trigger (New-PSTSMTriggerSpec -Type Daily -At '07:00')
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
-        Justification = 'Builds an in-memory plan object only. Register-PSTaskPlan is the command that changes system state, and it does support ShouldProcess.')]
+        Justification = 'Builds an in-memory plan object only. Register-PSTSMPlan is the command that changes system state, and it does support ShouldProcess.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, ParameterSetName = 'FromPath')]
@@ -107,14 +107,14 @@ function New-PSTaskPlan {
     )
 
     if (-not $ScriptProfile) {
-        $ScriptProfile = Get-PSTaskScriptProfile -Path $ScriptPath
+        $ScriptProfile = Get-PSTSMScriptProfile -Path $ScriptPath
     }
 
     $resolvedEngineId = if ($EngineId) { $EngineId } else { $ScriptProfile.EngineId }
 
     $resolvedEnginePath = $EnginePath
     if (-not $resolvedEnginePath) {
-        $candidates = @(Get-PSTaskEngine -Id $resolvedEngineId)
+        $candidates = @(Get-PSTSMEngine -Id $resolvedEngineId)
         # Prefer 64-bit; the list is already ordered newest-first.
         $pick = @($candidates | Where-Object { $_.Bitness -eq 'x64' } | Select-Object -First 1)
         if (-not $pick) { $pick = @($candidates | Select-Object -First 1) }
@@ -148,7 +148,7 @@ function New-PSTaskPlan {
         if ($resolvedParameters.Contains($p.Name)) { $orderedParameters[$p.Name] = $resolvedParameters[$p.Name] }
     }
     # Anything the script does not declare (common parameters, typos) keeps its position at
-    # the end rather than being silently dropped - Test-PSTaskPlan reports on it.
+    # the end rather than being silently dropped - Test-PSTSMPlan reports on it.
     foreach ($k in $resolvedParameters.Keys) {
         if (-not $orderedParameters.Contains($k)) { $orderedParameters[$k] = $resolvedParameters[$k] }
     }
@@ -201,7 +201,7 @@ function New-PSTaskPlan {
     if (-not $normalisedTaskPath.EndsWith('\')) { $normalisedTaskPath = $normalisedTaskPath + '\' }
 
     $plan = [PSCustomObject]@{
-        PSTypeName       = 'PSTaskBuilder.TaskPlan'
+        PSTypeName       = 'PSTSM.TaskPlan'
         SchemaVersion    = 1
 
         TaskName         = if ($TaskName) { $TaskName } else { $ScriptProfile.SuggestedTaskName }
@@ -244,7 +244,7 @@ function New-PSTaskPlan {
     # Convenience: the exact command line, recomputed on read so the preview pane can never
     # drift from what will actually be registered.
     $plan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value {
-        ConvertTo-PSTaskArgument -ScriptPath $this.ScriptPath `
+        ConvertTo-PSTSMArgument -ScriptPath $this.ScriptPath `
             -Parameters $this.Parameters `
             -ExtraArguments $this.ExtraArguments `
             -ExecutionPolicy $this.ExecutionPolicy `

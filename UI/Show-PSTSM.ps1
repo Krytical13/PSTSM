@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Show-PSTaskBuilder {
+function Show-PSTSM {
     <#
     .SYNOPSIS
         Main window: the list of scheduled tasks, with everything needed to create, inspect,
@@ -11,7 +11,7 @@ function Show-PSTaskBuilder {
         schedule, and a decoded Last Run Result, so a broken task is visible without opening
         anything.
 
-        New and Edit both open Show-PSTaskEditor. Editing round-trips the registered task back
+        New and Edit both open Show-PSTSMEditor. Editing round-trips the registered task back
         into a plan first, so a task created here can be reopened exactly as it was saved.
     .PARAMETER TaskPath
         Restrict the initial listing to one Task Scheduler folder.
@@ -28,9 +28,9 @@ function Show-PSTaskBuilder {
     .OUTPUTS
         None, or [System.Windows.Forms.Form] when -BuildOnly is used.
     .EXAMPLE
-        Show-PSTaskBuilder
+        Show-PSTSM
     .EXAMPLE
-        Show-PSTaskBuilder -ScriptPath 'D:\Scripts\Send-Report.ps1'
+        Show-PSTSM -ScriptPath 'D:\Scripts\Send-Report.ps1'
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TaskPath',
         Justification = 'Used inside the $reload scriptblock, which the analyzer does not follow.')]
@@ -42,17 +42,17 @@ function Show-PSTaskBuilder {
         [switch]$SelfTest
     )
 
-    Initialize-PSTaskUIHost
-    $t = Get-PSTaskUITheme
+    Initialize-PSTSMUIHost
+    $t = Get-PSTSMUITheme
 
     if ($ScriptPath -and -not $BuildOnly -and -not $SelfTest) {
-        [void](Show-PSTaskEditor -ScriptPath $ScriptPath)
+        [void](Show-PSTSMEditor -ScriptPath $ScriptPath)
         return
     }
 
     $state = @{ Rows = @() }
 
-    $form = New-PSTaskUIForm -Title 'PSTaskBuilder' -Width 1220 -Height 700
+    $form = New-PSTSMUIForm -Title 'PSTSM - PowerShell Task Scheduler Manager' -Width 1220 -Height 700
 
     $root = New-Object System.Windows.Forms.TableLayoutPanel
     $root.Dock = 'Fill'
@@ -65,14 +65,14 @@ function Show-PSTaskBuilder {
     [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
 
     # --- toolbar ---------------------------------------------------------------------
-    $btnNew = New-PSTaskUIButton -Text 'New task' -Primary -Width 100
-    $btnEdit = New-PSTaskUIButton -Text 'Edit'
-    $btnRun = New-PSTaskUIButton -Text 'Run now'
-    $btnToggle = New-PSTaskUIButton -Text 'Disable'
-    $btnDelete = New-PSTaskUIButton -Text 'Delete' -Danger
-    $btnExport = New-PSTaskUIButton -Text 'Export plan' -Width 110
-    $btnConsole = New-PSTaskUIButton -Text 'Task Scheduler' -Width 130
-    $btnRefresh = New-PSTaskUIButton -Text 'Refresh'
+    $btnNew = New-PSTSMUIButton -Text 'New task' -Primary -Width 100
+    $btnEdit = New-PSTSMUIButton -Text 'Edit'
+    $btnRun = New-PSTSMUIButton -Text 'Run now'
+    $btnToggle = New-PSTSMUIButton -Text 'Disable'
+    $btnDelete = New-PSTSMUIButton -Text 'Delete' -Danger
+    $btnExport = New-PSTSMUIButton -Text 'Export plan' -Width 110
+    $btnConsole = New-PSTSMUIButton -Text 'Task Scheduler' -Width 130
+    $btnRefresh = New-PSTSMUIButton -Text 'Refresh'
 
     $toolbar = New-Object System.Windows.Forms.FlowLayoutPanel
     $toolbar.Dock = 'Top'
@@ -90,10 +90,10 @@ function Show-PSTaskBuilder {
     $filterRow.WrapContents = $false
     $filterRow.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
 
-    $lblFind = New-PSTaskUILabel -Text 'Filter'
+    $lblFind = New-PSTSMUILabel -Text 'Filter'
     $lblFind.Margin = New-Object System.Windows.Forms.Padding(3, 9, 6, 3)
     $txtFilter = New-Object System.Windows.Forms.TextBox
-    $txtFilter.Width = [int](240 * (Get-PSTaskUIScale))
+    $txtFilter.Width = [int](240 * (Get-PSTSMUIScale))
     $txtFilter.BorderStyle = 'FixedSingle'
     $txtFilter.Margin = New-Object System.Windows.Forms.Padding(3, 6, 12, 3)
 
@@ -163,7 +163,7 @@ function Show-PSTaskBuilder {
     & $addColumn 'UserId' 'Run as' 90 $true
 
     # --- status ------------------------------------------------------------------------
-    $lblStatus = New-PSTaskUILabel -Text '' -ForeColor $t.Muted
+    $lblStatus = New-PSTSMUILabel -Text '' -ForeColor $t.Muted
     $lblStatus.Dock = 'Fill'
     $lblStatus.Margin = New-Object System.Windows.Forms.Padding(3, 6, 3, 3)
 
@@ -182,7 +182,7 @@ function Show-PSTaskBuilder {
             if ($TaskPath) { $p['TaskPath'] = $TaskPath }
             if ($chkPsOnly.Checked) { $p['PowerShellOnly'] = $true }
             if ($chkMicrosoft.Checked) { $p['IncludeMicrosoft'] = $true }
-            $state.Rows = @(Get-PSTaskInventory @p -ErrorAction SilentlyContinue)
+            $state.Rows = @(Get-PSTSMInventory @p -ErrorAction SilentlyContinue)
         }
         catch {
             $state.Rows = @()
@@ -264,20 +264,20 @@ function Show-PSTaskBuilder {
         param($summary)
         $plan = $null
         try {
-            $plan = ConvertFrom-PSTaskDefinition -TaskName $summary.TaskName -TaskPath $summary.TaskPath
+            $plan = ConvertFrom-PSTSMDefinition -TaskName $summary.TaskName -TaskPath $summary.TaskPath
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not read the task',
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             return
         }
-        $saved = Show-PSTaskEditor -Plan $plan -Owner $form
+        $saved = Show-PSTSMEditor -Plan $plan -Owner $form
         if ($saved) { & $reload }
     }
 
     # --- wiring ---------------------------------------------------------------------
     $btnNew.add_Click({
-            $saved = Show-PSTaskEditor -Owner $form
+            $saved = Show-PSTSMEditor -Owner $form
             if ($saved) { & $reload }
         })
 
@@ -352,7 +352,7 @@ function Show-PSTaskBuilder {
             $sel = & $getSelected
             if (-not $sel) { return }
             try {
-                $plan = ConvertFrom-PSTaskDefinition -TaskName $sel.TaskName -TaskPath $sel.TaskPath
+                $plan = ConvertFrom-PSTSMDefinition -TaskName $sel.TaskName -TaskPath $sel.TaskPath
             }
             catch {
                 [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not read the task',
@@ -363,7 +363,7 @@ function Show-PSTaskBuilder {
             $dlg.Filter = 'Task plan (*.json)|*.json'
             $dlg.FileName = "$($sel.TaskName).task.json"
             if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                try { Export-PSTaskPlan -Plan $plan -Path $dlg.FileName; $lblStatus.Text = "Exported to $($dlg.FileName)" }
+                try { Export-PSTSMPlan -Plan $plan -Path $dlg.FileName; $lblStatus.Text = "Exported to $($dlg.FileName)" }
                 catch {
                     [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Export failed',
                         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null

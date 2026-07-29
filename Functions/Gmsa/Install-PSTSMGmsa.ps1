@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Install-PSTaskGmsa {
+function Install-PSTSMGmsa {
     <#
     .SYNOPSIS
         Prepares THIS machine to run a task as a gMSA: caches the account, verifies it, and
@@ -11,7 +11,7 @@ function Install-PSTaskGmsa {
         Runs, in order:
           1. Install-ADServiceAccount  - caches the account locally
           2. Test-ADServiceAccount     - confirms the password can actually be retrieved
-          3. Grant-PSTaskBatchLogonRight - unless -SkipBatchLogonRight
+          3. Grant-PSTSMBatchLogonRight - unless -SkipBatchLogonRight
 
         The failure worth understanding: if the host was added to the gMSA's
         PrincipalsAllowedToRetrieveManagedPassword through a GROUP, its Kerberos ticket still
@@ -25,7 +25,7 @@ function Install-PSTaskGmsa {
     .OUTPUTS
         [pscustomobject] Name, Installed, Usable, BatchLogonRight, Message
     .EXAMPLE
-        Install-PSTaskGmsa -Name 'svc_reports'
+        Install-PSTSMGmsa -Name 'svc_reports'
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
@@ -44,7 +44,7 @@ function Install-PSTaskGmsa {
     $bare = $Name.TrimEnd('$')
 
     $result = [PSCustomObject]@{
-        PSTypeName      = 'PSTaskBuilder.GmsaInstallResult'
+        PSTypeName      = 'PSTSM.GmsaInstallResult'
         Name            = "$bare`$"
         Installed       = $false
         Usable          = $false
@@ -102,7 +102,7 @@ function Install-PSTaskGmsa {
     else {
         try {
             $domain = (Get-ADDomain).NetBIOSName
-            $granted = Grant-PSTaskBatchLogonRight -Account "$domain\$bare`$" -PassThru -Confirm:$false
+            $granted = Grant-PSTSMBatchLogonRight -Account "$domain\$bare`$" -PassThru -Confirm:$false
             $result.BatchLogonRight = if ($granted.AlreadyHeld) { 'already held' } elseif ($granted.Granted) { 'granted' } else { 'not granted' }
         }
         catch {

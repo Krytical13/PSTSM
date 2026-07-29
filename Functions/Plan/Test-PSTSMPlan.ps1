@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Test-PSTaskPlan {
+function Test-PSTSMPlan {
     <#
     .SYNOPSIS
         Preflights a task plan and returns the reasons it would fail at 3am rather than now.
@@ -17,16 +17,16 @@ function Test-PSTaskPlan {
         Severities: Error blocks registration. Warning is a real risk the operator should
         acknowledge. Info is context. Ok is a check that passed and is worth showing.
     .PARAMETER Plan
-        A New-PSTaskPlan object.
+        A New-PSTSMPlan object.
     .PARAMETER ScriptProfile
-        Pre-computed Get-PSTaskScriptProfile output. Re-derived from the plan if omitted.
+        Pre-computed Get-PSTSMScriptProfile output. Re-derived from the plan if omitted.
     .PARAMETER SkipExistingTaskCheck
         Do not query Task Scheduler for a name collision. Used by tests and by offline
         plan validation.
     .OUTPUTS
         [pscustomobject] Id, Severity, Title, Detail, Recommendation
     .EXAMPLE
-        Test-PSTaskPlan -Plan $plan | Where-Object Severity -in 'Error','Warning'
+        Test-PSTSMPlan -Plan $plan | Where-Object Severity -in 'Error','Warning'
     #>
     [CmdletBinding()]
     param(
@@ -40,9 +40,9 @@ function Test-PSTaskPlan {
 
     $results = New-Object System.Collections.Generic.List[object]
 
-    function Add-PSTaskCheck($id, $severity, $title, $detail, $recommendation) {
+    function Add-PSTSMCheck($id, $severity, $title, $detail, $recommendation) {
         $results.Add([PSCustomObject]@{
-                PSTypeName     = 'PSTaskBuilder.CheckResult'
+                PSTypeName     = 'PSTSM.CheckResult'
                 Id             = $id
                 Severity       = $severity
                 Title          = $title
@@ -53,42 +53,42 @@ function Test-PSTaskPlan {
 
     # --- script present and parseable ---------------------------------------------------
     if (-not (Test-Path -LiteralPath $Plan.ScriptPath -PathType Leaf)) {
-        Add-PSTaskCheck 'SCRIPT_MISSING' 'Error' 'Script not found' `
+        Add-PSTSMCheck 'SCRIPT_MISSING' 'Error' 'Script not found' `
             "No file at $($Plan.ScriptPath)." `
             'Pick the script again, or move it to a path the scheduled account can read.'
         return $results.ToArray()
     }
 
     if (-not $ScriptProfile) {
-        $ScriptProfile = Get-PSTaskScriptProfile -Path $Plan.ScriptPath -DefaultEngineId $Plan.EngineId
+        $ScriptProfile = Get-PSTSMScriptProfile -Path $Plan.ScriptPath -DefaultEngineId $Plan.EngineId
     }
 
     if (-not $ScriptProfile.IsParseable) {
-        Add-PSTaskCheck 'SCRIPT_PARSE' 'Error' 'Script does not parse' `
+        Add-PSTSMCheck 'SCRIPT_PARSE' 'Error' 'Script does not parse' `
             ($ScriptProfile.ParseErrors -join '; ') `
             'Fix the syntax errors; the task would fail immediately on every run.'
     }
 
     # --- engine ------------------------------------------------------------------------
     if (-not $Plan.EnginePath -or -not (Test-Path -LiteralPath $Plan.EnginePath -PathType Leaf)) {
-        Add-PSTaskCheck 'ENGINE_MISSING' 'Error' 'PowerShell engine not found' `
+        Add-PSTSMCheck 'ENGINE_MISSING' 'Error' 'PowerShell engine not found' `
             "No executable at '$($Plan.EnginePath)'." `
             'Choose an engine that exists on the machine this task will run on.'
     }
     else {
-        Add-PSTaskCheck 'ENGINE_OK' 'Ok' 'Engine resolved' "$($Plan.EnginePath)" $null
+        Add-PSTSMCheck 'ENGINE_OK' 'Ok' 'Engine resolved' "$($Plan.EnginePath)" $null
     }
 
     if ($ScriptProfile.RequiredVersion) {
         $needsCore = ([version]$ScriptProfile.RequiredVersion).Major -ge 6
         if ($needsCore -and $Plan.EngineId -eq 'powershell') {
-            Add-PSTaskCheck 'ENGINE_VERSION' 'Error' 'Engine cannot satisfy #Requires' `
+            Add-PSTSMCheck 'ENGINE_VERSION' 'Error' 'Engine cannot satisfy #Requires' `
                 "Script requires PowerShell $($ScriptProfile.RequiredVersion) but the task targets Windows PowerShell 5.1." `
                 'Switch the engine to pwsh, or remove the requirement.'
         }
     }
     if ($ScriptProfile.RequiredEditions -contains 'Core' -and $Plan.EngineId -eq 'powershell') {
-        Add-PSTaskCheck 'ENGINE_EDITION' 'Error' 'Engine edition mismatch' `
+        Add-PSTSMCheck 'ENGINE_EDITION' 'Error' 'Engine edition mismatch' `
             'Script requires PSEdition Core but the task targets Windows PowerShell (Desktop).' `
             'Switch the engine to pwsh.'
     }
@@ -106,7 +106,7 @@ function Test-PSTaskPlan {
         if ($null -eq $v -or ($v -is [string] -and $v.Trim() -eq '')) { $missingMandatory += $sp.Name }
     }
     if ($missingMandatory.Count -gt 0) {
-        Add-PSTaskCheck 'PARAM_MANDATORY' 'Error' 'Mandatory parameters have no value' `
+        Add-PSTSMCheck 'PARAM_MANDATORY' 'Error' 'Mandatory parameters have no value' `
             ("Not supplied: " + ($missingMandatory -join ', ')) `
             'Fill them in. Unattended, a missing mandatory parameter is a hard failure under -NonInteractive, not a prompt.'
     }
@@ -120,7 +120,7 @@ function Test-PSTaskPlan {
 
     $unknown = @($planParamNames | Where-Object { $n = $_; -not ($knownNames | Where-Object { $_ -eq $n }) })
     if ($unknown.Count -gt 0) {
-        Add-PSTaskCheck 'PARAM_UNKNOWN' 'Warning' 'Parameters the script does not declare' `
+        Add-PSTSMCheck 'PARAM_UNKNOWN' 'Warning' 'Parameters the script does not declare' `
             ($unknown -join ', ') `
             'Check for a typo. The script will fail to bind and exit before doing any work.'
     }
@@ -129,19 +129,19 @@ function Test-PSTaskPlan {
     if ($credParams.Count -gt 0) {
         $mandatoryCred = @($credParams | Where-Object { $_.IsMandatory })
         $sev = if ($mandatoryCred.Count -gt 0) { 'Error' } else { 'Warning' }
-        Add-PSTaskCheck 'PARAM_CREDENTIAL' $sev 'Script takes a credential parameter' `
+        Add-PSTSMCheck 'PARAM_CREDENTIAL' $sev 'Script takes a credential parameter' `
             ("Cannot be passed on a command line: " + (($credParams | ForEach-Object { $_.Name }) -join ', ')) `
             'Have the script read the secret itself (SecretManagement, DPAPI file, or gMSA so it needs none), or run the task as an account that already has the access.'
     }
 
     # --- interactivity -----------------------------------------------------------------
     if ($ScriptProfile.Signals.InteractiveCommands.Count -gt 0) {
-        Add-PSTaskCheck 'INTERACTIVE' 'Warning' 'Script prompts for input' `
+        Add-PSTSMCheck 'INTERACTIVE' 'Warning' 'Script prompts for input' `
             ("Found: " + ($ScriptProfile.Signals.InteractiveCommands -join ', ')) `
             'Unattended there is nobody to answer. With -NonInteractive these throw instead of hanging, so the task fails fast - but it still fails. Parameterise the input.'
     }
     if ($ScriptProfile.Signals.UsesGui) {
-        Add-PSTaskCheck 'GUI' 'Warning' 'Script shows a window' `
+        Add-PSTSMCheck 'GUI' 'Warning' 'Script shows a window' `
             'References WinForms/WPF types or a dialog.' `
             'A task running as S4U/SYSTEM has no desktop; the window is invisible and the task never ends.'
     }
@@ -151,7 +151,7 @@ function Test-PSTaskPlan {
     $networkish = @($ScriptProfile.Signals.NetworkCommands) + @($ScriptProfile.Signals.UncPaths)
 
     if ($logonType -eq 'S4U' -and $networkish.Count -gt 0) {
-        Add-PSTaskCheck 'S4U_NETWORK' 'Warning' 'S4U cannot authenticate to other machines' `
+        Add-PSTSMCheck 'S4U_NETWORK' 'Warning' 'S4U cannot authenticate to other machines' `
             ("Connectivity itself is fine - sockets, DNS and plain HTTPS all work. What fails is anything " +
             "authenticating AS THIS USER, because an S4U token carries no credentials and presents as ANONYMOUS. " +
             "Found: " + (($networkish | Select-Object -First 6) -join ', ')) `
@@ -160,11 +160,11 @@ function Test-PSTaskPlan {
             'Otherwise use a gMSA, or a stored password.')
     }
     elseif ($logonType -eq 'S4U') {
-        Add-PSTaskCheck 'S4U_OK' 'Ok' 'S4U logon is appropriate' 'Nothing that authenticates to another machine was detected.' $null
+        Add-PSTSMCheck 'S4U_OK' 'Ok' 'S4U logon is appropriate' 'Nothing that authenticates to another machine was detected.' $null
     }
 
     if ($logonType -eq 'S4U' -and $ScriptProfile.Signals.DpapiCommands.Count -gt 0) {
-        Add-PSTaskCheck 'S4U_DPAPI' 'Warning' 'S4U cannot decrypt DPAPI-protected secrets' `
+        Add-PSTSMCheck 'S4U_DPAPI' 'Warning' 'S4U cannot decrypt DPAPI-protected secrets' `
             ("The user's DPAPI master key is unlocked from their password, and an S4U logon has none - this is the " +
             "'or encrypted files' half of Microsoft's S4U note. Found: " + ($ScriptProfile.Signals.DpapiCommands -join ', ')) `
             ('The secret decrypts by hand and fails on the schedule. Use a stored password, a gMSA (no secret to store), ' +
@@ -173,7 +173,7 @@ function Test-PSTaskPlan {
     }
 
     if ($logonType -in @('S4U', 'Password', 'gMSA')) {
-        Add-PSTaskCheck 'BATCH_RIGHT' 'Info' 'Account needs "Log on as a batch job"' `
+        Add-PSTSMCheck 'BATCH_RIGHT' 'Info' 'Account needs "Log on as a batch job"' `
             "$($Plan.Principal.UserId) must hold SeBatchLogonRight on this machine." `
             'Usually granted already for admins; enforced by GPO in locked-down environments. Registration fails with 0x80070534 if it is missing. A gMSA almost never has it by default - grant it explicitly.'
     }
@@ -183,14 +183,14 @@ function Test-PSTaskPlan {
         $gmsa = $Plan.Principal.UserId
 
         if ($gmsa -notmatch '\$$') {
-            Add-PSTaskCheck 'GMSA_NAME' 'Warning' 'gMSA name does not end with $' `
+            Add-PSTSMCheck 'GMSA_NAME' 'Warning' 'gMSA name does not end with $' `
                 "'$gmsa' looks like a normal account name." `
                 "A gMSA is referenced by its sAMAccountName, which ends in '$' - for example DOMAIN\svc_reports$."
         }
 
         $adAvailable = [bool](Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)
         if (-not $adAvailable) {
-            Add-PSTaskCheck 'GMSA_NO_RSAT' 'Info' 'Cannot verify the gMSA from here' `
+            Add-PSTSMCheck 'GMSA_NO_RSAT' 'Info' 'Cannot verify the gMSA from here' `
                 'The ActiveDirectory module is not installed, so the account and this host''s eligibility cannot be checked.' `
                 'Install RSAT AD PowerShell to have these checks run, or verify manually with Test-ADServiceAccount on the machine that will run the task.'
         }
@@ -201,7 +201,7 @@ function Test-PSTaskPlan {
             catch { Write-Verbose "Get-ADServiceAccount failed for '$leaf': $($_.Exception.Message)" }
 
             if (-not $account) {
-                Add-PSTaskCheck 'GMSA_MISSING' 'Error' 'gMSA not found in the directory' `
+                Add-PSTSMCheck 'GMSA_MISSING' 'Error' 'gMSA not found in the directory' `
                     "No managed service account matching '$leaf' could be read." `
                     'Check the name, or create it first. Note gMSA names are unique per FOREST, not per domain.'
             }
@@ -216,32 +216,32 @@ function Test-PSTaskPlan {
                 catch { Write-Verbose "Test-ADServiceAccount failed: $($_.Exception.Message)" }
 
                 if ($usable -eq $true) {
-                    Add-PSTaskCheck 'GMSA_OK' 'Ok' 'This machine can use the gMSA' "$gmsa is installed and retrievable here." $null
+                    Add-PSTSMCheck 'GMSA_OK' 'Ok' 'This machine can use the gMSA' "$gmsa is installed and retrievable here." $null
                 }
                 elseif ($usable -eq $false) {
-                    Add-PSTaskCheck 'GMSA_NOT_USABLE' 'Error' 'This machine cannot retrieve the gMSA password' `
+                    Add-PSTSMCheck 'GMSA_NOT_USABLE' 'Error' 'This machine cannot retrieve the gMSA password' `
                         "Test-ADServiceAccount returned false for '$leaf'." `
                         'Add this computer (ideally via a group) to the gMSA''s PrincipalsAllowedToRetrieveManagedPassword, then REBOOT so the host gets a Kerberos ticket carrying the new membership, then run Install-ADServiceAccount.'
                 }
                 else {
-                    Add-PSTaskCheck 'GMSA_UNVERIFIED' 'Info' 'gMSA exists but could not be tested here' `
+                    Add-PSTSMCheck 'GMSA_UNVERIFIED' 'Info' 'gMSA exists but could not be tested here' `
                         'Test-ADServiceAccount did not return a result - it requires an elevated session.' `
                         'Re-run elevated on the machine that will host the task.'
                 }
             }
         }
 
-        Add-PSTaskCheck 'GMSA_NO_SECRET' 'Ok' 'No password to store or rotate' `
+        Add-PSTSMCheck 'GMSA_NO_SECRET' 'Ok' 'No password to store or rotate' `
             'The directory manages the password and the host retrieves it.' $null
     }
     if ($logonType -eq 'Password') {
-        Add-PSTaskCheck 'PASSWORD_ROTATION' 'Info' 'Stored password will expire' `
+        Add-PSTSMCheck 'PASSWORD_ROTATION' 'Info' 'Stored password will expire' `
             'The task stops running the next time this account rotates its password.' `
             'Prefer a gMSA where the domain supports it - it rotates itself and stores nothing.'
     }
 
     if ($ScriptProfile.RequiresElevation -and $Plan.Principal.RunLevel -ne 'Highest') {
-        Add-PSTaskCheck 'ELEVATION' 'Error' 'Script requires elevation' `
+        Add-PSTSMCheck 'ELEVATION' 'Error' 'Script requires elevation' `
             "'#Requires -RunAsAdministrator' is present but the task runs with RunLevel $($Plan.Principal.RunLevel)." `
             'Tick "Run with highest privileges".'
     }
@@ -250,7 +250,7 @@ function Test-PSTaskPlan {
     foreach ($m in $ScriptProfile.RequiredModules) {
         $found = @(Get-Module -ListAvailable -Name $m.Name -ErrorAction SilentlyContinue)
         if ($found.Count -eq 0) {
-            Add-PSTaskCheck 'MODULE_MISSING' 'Error' "Required module not installed: $($m.Name)" `
+            Add-PSTSMCheck 'MODULE_MISSING' 'Error' "Required module not installed: $($m.Name)" `
                 "'#Requires -Modules $($m.Name)' cannot be satisfied on this machine." `
                 'Install it for AllUsers (Install-Module -Scope AllUsers) so every account can load it.'
             continue
@@ -258,43 +258,43 @@ function Test-PSTaskPlan {
 
         $userScopeOnly = -not (@($found | Where-Object { $_.ModuleBase -notlike "$env:USERPROFILE*" }).Count -gt 0)
         if ($userScopeOnly) {
-            Add-PSTaskCheck 'MODULE_USERSCOPE' 'Warning' "Module only installed for you: $($m.Name)" `
+            Add-PSTSMCheck 'MODULE_USERSCOPE' 'Warning' "Module only installed for you: $($m.Name)" `
                 "Found only under $env:USERPROFILE." `
                 'A task running as SYSTEM, a gMSA, or another user will not see it. Reinstall with -Scope AllUsers.'
         }
         else {
-            Add-PSTaskCheck 'MODULE_OK' 'Ok' "Module available machine-wide: $($m.Name)" $null $null
+            Add-PSTSMCheck 'MODULE_OK' 'Ok' "Module available machine-wide: $($m.Name)" $null $null
         }
     }
 
     # --- encoding ----------------------------------------------------------------------
     if ($Plan.EngineId -eq 'powershell' -and $ScriptProfile.Encoding.HasNonAscii -and -not $ScriptProfile.Encoding.HasBom) {
-        Add-PSTaskCheck 'ENCODING' 'Warning' 'UTF-8 without BOM under Windows PowerShell' `
+        Add-PSTSMCheck 'ENCODING' 'Warning' 'UTF-8 without BOM under Windows PowerShell' `
             'The file contains non-ASCII bytes and has no byte-order mark.' `
             'Windows PowerShell 5.1 reads BOM-less files as ANSI, so those characters will be mangled at run time even though the file looks correct in an editor. Re-save as UTF-8 with BOM.'
     }
 
     # --- exit codes --------------------------------------------------------------------
     if (-not $ScriptProfile.Signals.HasExitStatement) {
-        Add-PSTaskCheck 'EXIT_CODE' 'Warning' 'Script never sets an exit code' `
+        Add-PSTSMCheck 'EXIT_CODE' 'Warning' 'Script never sets an exit code' `
             'No exit or throw statement found.' `
             "Task Scheduler will record 'Last Run Result: 0x0' whether the script worked or not, so a broken task looks healthy. Add an exit code, or leave logging on Transcript so there is something to read."
     }
 
     # --- paths -------------------------------------------------------------------------
     if ($Plan.WorkingDirectory -and -not (Test-Path -LiteralPath $Plan.WorkingDirectory -PathType Container)) {
-        Add-PSTaskCheck 'WORKDIR' 'Warning' 'Working directory does not exist' `
+        Add-PSTSMCheck 'WORKDIR' 'Warning' 'Working directory does not exist' `
             $Plan.WorkingDirectory `
             'Task Scheduler does not create it; the action fails with 0x2 (file not found).'
     }
 
     if ($Plan.ScriptPath -like "$env:USERPROFILE*" -and $Plan.Principal.LogonType -eq 'ServiceAccount') {
-        Add-PSTaskCheck 'SCRIPT_IN_PROFILE' 'Warning' 'Script lives in your user profile' `
+        Add-PSTSMCheck 'SCRIPT_IN_PROFILE' 'Warning' 'Script lives in your user profile' `
             "$($Plan.ScriptPath) runs as $($Plan.Principal.UserId)." `
             'SYSTEM and service accounts cannot reliably read another user profile. Move the script somewhere machine-wide such as C:\Scripts.'
     }
     if ($Plan.ScriptPath -match '^\\\\') {
-        Add-PSTaskCheck 'SCRIPT_ON_UNC' 'Warning' 'Script is on a network share' `
+        Add-PSTSMCheck 'SCRIPT_ON_UNC' 'Warning' 'Script is on a network share' `
             $Plan.ScriptPath `
             'The share must be readable by the task account at run time - and S4U cannot authenticate to it at all. Prefer a local copy.'
     }
@@ -314,26 +314,26 @@ function Test-PSTaskPlan {
         $source = if ($overridden) { "supplied via -$($cfg.ParameterName)" } else { "the script's default for -$($cfg.ParameterName)" }
 
         if (-not (Test-Path -LiteralPath $effectivePath -PathType Leaf)) {
-            Add-PSTaskCheck 'CONFIG_MISSING' 'Error' 'Settings file does not exist' `
+            Add-PSTSMCheck 'CONFIG_MISSING' 'Error' 'Settings file does not exist' `
                 "$effectivePath ($source)." `
                 'The script reads its configuration from here, so the task fails on the first run. Create it, or point the parameter somewhere else.'
             continue
         }
 
         if ($cfg.Parses -eq $false -and -not $overridden) {
-            Add-PSTaskCheck 'CONFIG_UNPARSEABLE' 'Error' 'Settings file does not parse' `
+            Add-PSTSMCheck 'CONFIG_UNPARSEABLE' 'Error' 'Settings file does not parse' `
                 "$effectivePath - $($cfg.ParseError)" `
                 'The script will throw as soon as it reads this. Fix the file before scheduling.'
             continue
         }
 
         if ($effectivePath -like "$env:USERPROFILE*") {
-            Add-PSTaskCheck 'CONFIG_IN_PROFILE' 'Warning' 'Settings file is in your user profile' `
+            Add-PSTSMCheck 'CONFIG_IN_PROFILE' 'Warning' 'Settings file is in your user profile' `
                 "$effectivePath ($source)." `
                 "The task account is not you. SYSTEM and service accounts cannot reliably read another user's profile - move it somewhere machine-wide."
         }
         elseif ($effectivePath -match '^\\\\') {
-            Add-PSTaskCheck 'CONFIG_ON_UNC' 'Warning' 'Settings file is on a network share' `
+            Add-PSTSMCheck 'CONFIG_ON_UNC' 'Warning' 'Settings file is on a network share' `
                 "$effectivePath ($source)." `
                 'The task account must be able to read the share at run time - and an S4U logon cannot authenticate to it at all.'
         }
@@ -344,25 +344,25 @@ function Test-PSTaskPlan {
                 if ($cfg.Keys.Count -gt 8) { $shown += ", ... ($($cfg.Keys.Count) settings)" }
                 $detail += " - $shown"
             }
-            Add-PSTaskCheck 'CONFIG_OK' 'Ok' "Settings file found for -$($cfg.ParameterName)" $detail $null
+            Add-PSTSMCheck 'CONFIG_OK' 'Ok' "Settings file found for -$($cfg.ParameterName)" $detail $null
         }
     }
 
     # --- triggers ----------------------------------------------------------------------
     if (-not $Plan.Triggers -or @($Plan.Triggers).Count -eq 0) {
-        Add-PSTaskCheck 'NO_TRIGGERS' 'Warning' 'Task has no triggers' `
+        Add-PSTSMCheck 'NO_TRIGGERS' 'Warning' 'Task has no triggers' `
             'It will only ever run when started by hand.' `
             'Add at least one trigger, or keep it deliberately as a manual/on-demand task.'
     }
 
     # --- settings sanity ---------------------------------------------------------------
     if ($Plan.Settings.DisallowStartIfOnBatteries) {
-        Add-PSTaskCheck 'BATTERY' 'Info' 'Task will be skipped on battery' `
+        Add-PSTSMCheck 'BATTERY' 'Info' 'Task will be skipped on battery' `
             'DisallowStartIfOnBatteries is on.' `
             'Fine for a server; on a laptop this silently skips runs.'
     }
     if (-not $Plan.Settings.ExecutionTimeLimit -or $Plan.Settings.ExecutionTimeLimit -eq '00:00:00') {
-        Add-PSTaskCheck 'NO_TIMEOUT' 'Info' 'No execution time limit' `
+        Add-PSTSMCheck 'NO_TIMEOUT' 'Info' 'No execution time limit' `
             'A wedged run will hold the task in Running indefinitely.' `
             'With MultipleInstances = IgnoreNew that blocks every later run until someone notices.'
     }
@@ -372,9 +372,9 @@ function Test-PSTaskPlan {
         try {
             $existing = Get-ScheduledTask -TaskName $Plan.TaskName -TaskPath $Plan.TaskPath -ErrorAction SilentlyContinue
             if ($existing) {
-                Add-PSTaskCheck 'TASK_EXISTS' 'Info' 'A task with this name already exists' `
+                Add-PSTSMCheck 'TASK_EXISTS' 'Info' 'A task with this name already exists' `
                     "$($Plan.TaskPath)$($Plan.TaskName)" `
-                    'Registering will overwrite it. Use Export-PSTaskPlan first if you want a way back.'
+                    'Registering will overwrite it. Use Export-PSTSMPlan first if you want a way back.'
             }
         }
         catch { Write-Verbose "Could not query Task Scheduler for an existing task: $($_.Exception.Message)" }

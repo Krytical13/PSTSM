@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Grant-PSTaskBatchLogonRight {
+function Grant-PSTSMBatchLogonRight {
     <#
     .SYNOPSIS
         Grants "Log on as a batch job" (SeBatchLogonRight) to an account on this machine.
@@ -27,7 +27,7 @@ function Grant-PSTaskBatchLogonRight {
     .OUTPUTS
         [pscustomobject] Account, Sid, AlreadyHeld, Granted - when -PassThru is used.
     .EXAMPLE
-        Grant-PSTaskBatchLogonRight -Account 'CONTOSO\svc_reports$'
+        Grant-PSTSMBatchLogonRight -Account 'CONTOSO\svc_reports$'
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
@@ -83,7 +83,7 @@ function Grant-PSTaskBatchLogonRight {
         $alreadyHeld = [bool](@($members | Where-Object { $_.TrimStart('*') -eq $sid }).Count -gt 0)
 
         $result = [PSCustomObject]@{
-            PSTypeName  = 'PSTaskBuilder.BatchRightResult'
+            PSTypeName  = 'PSTSM.BatchRightResult'
             Account     = $Account
             Sid         = $sid
             AlreadyHeld = $alreadyHeld

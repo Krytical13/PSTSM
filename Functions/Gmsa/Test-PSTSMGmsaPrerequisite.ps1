@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Test-PSTaskGmsaPrerequisite {
+function Test-PSTSMGmsaPrerequisite {
     <#
     .SYNOPSIS
         Checks whether this machine and forest can create and use a group managed service
@@ -23,9 +23,9 @@ function Test-PSTaskGmsaPrerequisite {
         one".
     .OUTPUTS
         [pscustomobject] Id, Severity, Title, Detail, Recommendation - the same shape
-        Test-PSTaskPlan returns, so the UI renders both with one code path.
+        Test-PSTSMPlan returns, so the UI renders both with one code path.
     .EXAMPLE
-        Test-PSTaskGmsaPrerequisite | Where-Object Severity -in 'Error','Warning'
+        Test-PSTSMGmsaPrerequisite | Where-Object Severity -in 'Error','Warning'
     #>
     [CmdletBinding()]
     param()
@@ -34,7 +34,7 @@ function Test-PSTaskGmsaPrerequisite {
 
     function Add-GmsaCheck($id, $severity, $title, $detail, $recommendation) {
         $results.Add([PSCustomObject]@{
-                PSTypeName     = 'PSTaskBuilder.CheckResult'
+                PSTypeName     = 'PSTSM.CheckResult'
                 Id             = $id
                 Severity       = $severity
                 Title          = $title

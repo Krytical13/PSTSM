@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# PSTaskBuilderUI.Common.ps1
+# PSTSMUI.Common.ps1
 # Shared WinForms scaffolding: theme, control factories, and the host setup every window needs.
 #
 # Constraints baked in here, all learned the hard way on Windows PowerShell 5.1:
@@ -19,9 +19,9 @@ Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 # TextBox.PlaceholderText only exists from .NET Core 3.0, and this has to work on Windows
 # PowerShell 5.1 / .NET Framework. EM_SETCUEBANNER is the native equivalent and has been on
 # every Edit control since XP.
-if (-not ('PSTaskBuilderNative.Win32' -as [type])) {
+if (-not ('PSTSMNative.Win32' -as [type])) {
     try {
-        Add-Type -Namespace 'PSTaskBuilderNative' -Name 'Win32' -MemberDefinition @'
+        Add-Type -Namespace 'PSTSMNative' -Name 'Win32' -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern System.IntPtr SendMessage(System.IntPtr hWnd, int msg, System.IntPtr wParam, string lParam);
 '@ -ErrorAction Stop
@@ -29,7 +29,7 @@ public static extern System.IntPtr SendMessage(System.IntPtr hWnd, int msg, Syst
     catch { Write-Verbose "Cue-banner interop unavailable: $($_.Exception.Message)" }
 }
 
-function Set-PSTaskUICueBanner {
+function Set-PSTSMUICueBanner {
     <#
     .SYNOPSIS
         Shows greyed hint text inside an empty textbox, which disappears as soon as the user
@@ -54,18 +54,18 @@ function Set-PSTaskUICueBanner {
         [AllowEmptyString()][string]$Text
     )
 
-    if (-not ('PSTaskBuilderNative.Win32' -as [type])) { return }
+    if (-not ('PSTSMNative.Win32' -as [type])) { return }
     try {
         # wParam 1 keeps the cue visible while the box has focus, until a character is typed.
-        [void][PSTaskBuilderNative.Win32]::SendMessage($TextBox.Handle, 0x1501, [IntPtr]1, $Text)
+        [void][PSTSMNative.Win32]::SendMessage($TextBox.Handle, 0x1501, [IntPtr]1, $Text)
     }
     catch { Write-Verbose "Could not set cue banner: $($_.Exception.Message)" }
 }
 
-function Get-PSTaskUITheme {
+function Get-PSTSMUITheme {
     <#
     .SYNOPSIS
-        Returns the colour and font palette shared by every PSTaskBuilder window.
+        Returns the colour and font palette shared by every PSTSM window.
     .DESCRIPTION
         Contrast ratios are chosen against SC 1.4.3 (text, 4.5:1) and SC 1.4.11 (control
         boundaries, 3:1) on the white surface these windows use:
@@ -103,7 +103,7 @@ function Get-PSTaskUITheme {
     }
 }
 
-function Initialize-PSTaskUIHost {
+function Initialize-PSTSMUIHost {
     <#
     .SYNOPSIS
         One-time process setup for showing WinForms windows from PowerShell.
@@ -115,10 +115,10 @@ function Initialize-PSTaskUIHost {
     [CmdletBinding()]
     param()
 
-    # The flag lives on the AppDomain, not in $script: scope. Start-PSTaskBuilder.ps1 does
+    # The flag lives on the AppDomain, not in $script: scope. Start-PSTSM.ps1 does
     # Import-Module -Force on every launch, which resets module scope - so a second run in the
     # same PowerShell session re-entered this after windows already existed.
-    if ([System.AppDomain]::CurrentDomain.GetData('PSTaskBuilderUIHostReady')) { return }
+    if ([System.AppDomain]::CurrentDomain.GetData('PSTSMUIHostReady')) { return }
 
     [System.Windows.Forms.Application]::EnableVisualStyles()
 
@@ -137,32 +137,32 @@ function Initialize-PSTaskUIHost {
         [System.Windows.Forms.Application]::add_ThreadException({
                 param($src, $e)   # not $sender - PSScriptAnalyzer treats that as an automatic variable
                 $null = $src
-                # Set PSTASKBUILDER_NODIALOG in automated runs. Without it a handler bug in a
+                # Set PSTSM_NODIALOG in automated runs. Without it a handler bug in a
                 # headless harness pops a modal message box on the desktop of whoever is at the
                 # machine, and blocks until somebody dismisses it.
-                if ($env:PSTASKBUILDER_NODIALOG) {
-                    Write-Warning "PSTaskBuilder UI exception: $($e.Exception.Message)"
+                if ($env:PSTSM_NODIALOG) {
+                    Write-Warning "PSTSM UI exception: $($e.Exception.Message)"
                     return
                 }
                 [System.Windows.Forms.MessageBox]::Show(
                     "$($e.Exception.Message)`n`n$($e.Exception.StackTrace)",
-                    'PSTaskBuilder - unexpected error',
+                    'PSTSM - unexpected error',
                     [System.Windows.Forms.MessageBoxButtons]::OK,
                     [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             })
     }
     catch { Write-Verbose "Could not install thread-exception handler: $($_.Exception.Message)" }
 
-    [System.AppDomain]::CurrentDomain.SetData('PSTaskBuilderUIHostReady', $true)
+    [System.AppDomain]::CurrentDomain.SetData('PSTSMUIHostReady', $true)
 }
 
-function Get-PSTaskUIScale {
+function Get-PSTSMUIScale {
     <#
     .SYNOPSIS
         Returns the display scale factor (1.0 at 100%, 1.5 at 150%).
     .DESCRIPTION
         These forms run with AutoScaleMode 'None' because WinForms' font-based scaling resizes
-        the form out from under any explicit ClientSize (see New-PSTaskUIForm). That makes the
+        the form out from under any explicit ClientSize (see New-PSTSMUIForm). That makes the
         scale factor ours to apply.
 
         Anything that can size itself should: AutoSize controls and AutoSize table columns need
@@ -184,7 +184,7 @@ function Get-PSTaskUIScale {
     1.0
 }
 
-function New-PSTaskUIForm {
+function New-PSTSMUIForm {
     <#
     .SYNOPSIS
         Creates a themed top-level form with sane scaling defaults.
@@ -209,8 +209,8 @@ function New-PSTaskUIForm {
         [int]$Height = 720
     )
 
-    $t = Get-PSTaskUITheme
-    $scale = Get-PSTaskUIScale
+    $t = Get-PSTSMUITheme
+    $scale = Get-PSTSMUIScale
     $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 
     $form = New-Object System.Windows.Forms.Form
@@ -243,7 +243,7 @@ function New-PSTaskUIForm {
     $form
 }
 
-function New-PSTaskUILabel {
+function New-PSTSMUILabel {
     <#
     .SYNOPSIS
         Creates an auto-sizing label.
@@ -268,7 +268,7 @@ function New-PSTaskUILabel {
         [System.Drawing.Color]$ForeColor
     )
 
-    $t = Get-PSTaskUITheme
+    $t = Get-PSTSMUITheme
     $l = New-Object System.Windows.Forms.Label
     $l.Text = $Text
     $l.AutoSize = $true
@@ -279,7 +279,7 @@ function New-PSTaskUILabel {
     $l
 }
 
-function New-PSTaskUIButton {
+function New-PSTSMUIButton {
     <#
     .SYNOPSIS
         Creates a flat button, optionally styled as the one primary action.
@@ -309,7 +309,7 @@ function New-PSTaskUIButton {
         [int]$Width = 104
     )
 
-    $t = Get-PSTaskUITheme
+    $t = Get-PSTSMUITheme
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $Text
 
@@ -317,7 +317,7 @@ function New-PSTaskUIButton {
     # any machine that is not at 100% scaling: the font renders larger while a hardcoded 104x30
     # button stays literally 104x30, so the text is cut off. Letting the button measure its own
     # caption is correct at every DPI and needs no scale factor - which matters because the
-    # forms here run with AutoScaleMode 'None' (see New-PSTaskUIForm) and get no help from
+    # forms here run with AutoScaleMode 'None' (see New-PSTSMUIForm) and get no help from
     # WinForms' own scaling.
     $b.AutoSize = $true
     $b.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
@@ -347,7 +347,7 @@ function New-PSTaskUIButton {
     $b
 }
 
-function New-PSTaskUITextBox {
+function New-PSTSMUITextBox {
     <#
     .SYNOPSIS
         Creates a bordered textbox that fills its cell.
@@ -372,7 +372,7 @@ function New-PSTaskUITextBox {
         [switch]$Monospace
     )
 
-    $t = Get-PSTaskUITheme
+    $t = Get-PSTSMUITheme
     $tb = New-Object System.Windows.Forms.TextBox
     $tb.Text = $Text
     $tb.Dock = 'Fill'
@@ -391,7 +391,7 @@ function New-PSTaskUITextBox {
     $tb
 }
 
-function New-PSTaskUIActionBar {
+function New-PSTSMUIActionBar {
     <#
     .SYNOPSIS
         Builds a bottom action bar with left- and right-aligned button groups.
@@ -444,12 +444,12 @@ function New-PSTaskUIActionBar {
     $bar
 }
 
-function New-PSTaskUIFieldTable {
+function New-PSTSMUIFieldTable {
     <#
     .SYNOPSIS
         Creates a two-column label/control table that grows downward.
     .DESCRIPTION
-        Used for every form section. Add rows with Add-PSTaskUIField.
+        Used for every form section. Add rows with Add-PSTSMUIField.
     .OUTPUTS
         [System.Windows.Forms.TableLayoutPanel]
     #>
@@ -471,12 +471,12 @@ function New-PSTaskUIFieldTable {
     $tlp
 }
 
-function Add-PSTaskUIField {
+function Add-PSTSMUIField {
     <#
     .SYNOPSIS
         Appends a labelled row to a field table.
     .PARAMETER Table
-        The table from New-PSTaskUIFieldTable.
+        The table from New-PSTSMUIFieldTable.
     .PARAMETER Label
         Row label. Pass an empty string to span the control across both columns.
     .PARAMETER Control
@@ -500,7 +500,7 @@ function Add-PSTaskUIField {
         $Table.SetColumnSpan($Control, 2)
     }
     else {
-        $l = New-PSTaskUILabel -Text $Label
+        $l = New-PSTSMUILabel -Text $Label
         $l.Anchor = 'Left'
         $l.Margin = New-Object System.Windows.Forms.Padding(3, 9, 3, 3)
         $Table.Controls.Add($l, 0, $row)
@@ -508,7 +508,7 @@ function Add-PSTaskUIField {
     }
 }
 
-function New-PSTaskUISection {
+function New-PSTSMUISection {
     <#
     .SYNOPSIS
         Creates a titled section: a header label, an accent rule, and a content panel.
@@ -527,7 +527,7 @@ function New-PSTaskUISection {
         [Parameter(Mandatory)][string]$Title
     )
 
-    $t = Get-PSTaskUITheme
+    $t = Get-PSTSMUITheme
 
     $container = New-Object System.Windows.Forms.TableLayoutPanel
     $container.Dock = 'Top'
@@ -536,7 +536,7 @@ function New-PSTaskUISection {
     $container.ColumnCount = 1
     $container.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 12)
 
-    $header = New-PSTaskUILabel -Text $Title -Header
+    $header = New-PSTSMUILabel -Text $Title -Header
     $header.ForeColor = $t.Accent
     $header.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 2)
 
@@ -563,7 +563,7 @@ function New-PSTaskUISection {
     [PSCustomObject]@{ Container = $container; Content = $content; Header = $header }
 }
 
-function Add-PSTaskUIStacked {
+function Add-PSTSMUIStacked {
     <#
     .SYNOPSIS
         Appends a control as a new auto-sized row of a single-column stack panel.
@@ -586,7 +586,7 @@ function Add-PSTaskUIStacked {
     $Stack.Controls.Add($Control, 0, $r)
 }
 
-function Get-PSTaskUISeverityStyle {
+function Get-PSTSMUISeverityStyle {
     <#
     .SYNOPSIS
         Maps a preflight severity to its display token and colour.
@@ -600,7 +600,7 @@ function Get-PSTaskUISeverityStyle {
     [CmdletBinding()]
     param([string]$Severity)
 
-    $t = Get-PSTaskUITheme
+    $t = Get-PSTSMUITheme
     switch ($Severity) {
         'Error' { [PSCustomObject]@{ Token = 'ERROR'; Color = $t.Danger; Rank = 0 } }
         'Warning' { [PSCustomObject]@{ Token = 'WARN '; Color = $t.Warn; Rank = 1 } }

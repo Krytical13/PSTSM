@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function ConvertFrom-PSTaskAction {
+function ConvertFrom-PSTSMAction {
     <#
     .SYNOPSIS
         Reverses an existing scheduled task's action back into engine + script + parameters,
@@ -30,7 +30,7 @@ function ConvertFrom-PSTaskAction {
                          WindowStyle, RawArguments, Notes
     .EXAMPLE
         $a = (Get-ScheduledTask -TaskName 'Nightly').Actions[0]
-        ConvertFrom-PSTaskAction -Execute $a.Execute -Arguments $a.Arguments
+        ConvertFrom-PSTSMAction -Execute $a.Execute -Arguments $a.Arguments
     #>
     [CmdletBinding()]
     param(
@@ -62,7 +62,7 @@ function ConvertFrom-PSTaskAction {
     $bitness = if ($Execute -match '(?i)\\SysWOW64\\') { 'x86' } elseif ($engineId) { 'x64' } else { $null }
 
     $result = [PSCustomObject]@{
-        PSTypeName       = 'PSTaskBuilder.ParsedAction'
+        PSTypeName       = 'PSTSM.ParsedAction'
         IsPowerShell     = [bool]$engineId
         IsRecognized     = $false
         EngineId         = $engineId

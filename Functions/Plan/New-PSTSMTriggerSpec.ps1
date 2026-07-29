@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function New-PSTaskTriggerSpec {
+function New-PSTSMTriggerSpec {
     <#
     .SYNOPSIS
         Builds a plain, serialisable trigger description for a task plan.
     .DESCRIPTION
         Deliberately NOT a CimInstance. Plans are exported to JSON and applied to other
         machines, so triggers are stored as data and only converted to real
-        New-ScheduledTaskTrigger output at registration time by Register-PSTaskPlan.
+        New-ScheduledTaskTrigger output at registration time by Register-PSTSMPlan.
 
         Repetition is expressed here rather than bolted on afterwards because
         New-ScheduledTaskTrigger cannot set RepetitionInterval for every trigger type
-        directly - Register-PSTaskPlan applies it to the CIM object after construction.
+        directly - Register-PSTSMPlan applies it to the CIM object after construction.
     .PARAMETER Type
         Once, Daily, Weekly, AtStartup, AtLogOn, OnIdle.
     .PARAMETER At
@@ -39,12 +39,12 @@ function New-PSTaskTriggerSpec {
     .OUTPUTS
         [pscustomobject]
     .EXAMPLE
-        New-PSTaskTriggerSpec -Type Daily -At '07:00' -RandomDelay '00:05:00'
+        New-PSTSMTriggerSpec -Type Daily -At '07:00' -RandomDelay '00:05:00'
     .EXAMPLE
-        New-PSTaskTriggerSpec -Type Weekly -At '18:30' -DaysOfWeek Monday,Thursday
+        New-PSTSMTriggerSpec -Type Weekly -At '18:30' -DaysOfWeek Monday,Thursday
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
-        Justification = 'Builds an in-memory trigger description only; nothing is registered until Register-PSTaskPlan runs.')]
+        Justification = 'Builds an in-memory trigger description only; nothing is registered until Register-PSTSMPlan runs.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -114,7 +114,7 @@ function New-PSTaskTriggerSpec {
     }
 
     [PSCustomObject]@{
-        PSTypeName         = 'PSTaskBuilder.TriggerSpec'
+        PSTypeName         = 'PSTSM.TriggerSpec'
         Type               = $Type
         At                 = if ($startBoundary) { $startBoundary.ToString('yyyy-MM-ddTHH:mm:ss') } else { $null }
         DaysOfWeek         = if ($DaysOfWeek) { @($DaysOfWeek) } else { @() }

@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-function Register-PSTaskPlan {
+function Register-PSTSMPlan {
     <#
     .SYNOPSIS
         Registers (or updates) a Windows scheduled task from a plan.
     .DESCRIPTION
         Turns the plan's plain data into the CIM objects the ScheduledTasks module wants, then
-        registers it. Runs Test-PSTaskPlan first and refuses on any Error unless -Force.
+        registers it. Runs Test-PSTSMPlan first and refuses on any Error unless -Force.
 
         When Logging.Mode is 'Transcript' the action points at a generated wrapper rather than
         the script itself, so every run leaves a log and a truthful exit code. The wrapper is
         regenerated here on every save so it can never drift from the plan.
     .PARAMETER Plan
-        A New-PSTaskPlan object.
+        A New-PSTSMPlan object.
     .PARAMETER Password
         Required when Principal.LogonType is 'Password'. Never persisted to the plan; it goes
         straight to Task Scheduler's own credential store.
@@ -22,9 +22,9 @@ function Register-PSTaskPlan {
     .OUTPUTS
         The registered scheduled task when -PassThru is used.
     .EXAMPLE
-        Register-PSTaskPlan -Plan $plan
+        Register-PSTSMPlan -Plan $plan
     .EXAMPLE
-        Register-PSTaskPlan -Plan $plan -Password (Read-Host -AsSecureString)
+        Register-PSTSMPlan -Plan $plan -Password (Read-Host -AsSecureString)
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
@@ -39,7 +39,7 @@ function Register-PSTaskPlan {
     )
 
     # --- preflight ---------------------------------------------------------------------
-    $checks = Test-PSTaskPlan -Plan $Plan
+    $checks = Test-PSTSMPlan -Plan $Plan
     $errors = @($checks | Where-Object { $_.Severity -eq 'Error' })
     if ($errors.Count -gt 0 -and -not $Force) {
         $detail = ($errors | ForEach-Object { "  [$($_.Id)] $($_.Title): $($_.Detail)" }) -join [Environment]::NewLine
@@ -56,11 +56,11 @@ function Register-PSTaskPlan {
     # --- action ------------------------------------------------------------------------
     $targetScript = $Plan.ScriptPath
     if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript') {
-        $targetScript = New-PSTaskLogWrapper -Plan $Plan
+        $targetScript = New-PSTSMLogWrapper -Plan $Plan
         Write-Verbose "Action targets log wrapper: $targetScript"
     }
 
-    $argumentString = ConvertTo-PSTaskArgument -ScriptPath $targetScript `
+    $argumentString = ConvertTo-PSTSMArgument -ScriptPath $targetScript `
         -Parameters $Plan.Parameters `
         -ExtraArguments $Plan.ExtraArguments `
         -ExecutionPolicy $Plan.ExecutionPolicy `
@@ -78,7 +78,7 @@ function Register-PSTaskPlan {
     # --- triggers ----------------------------------------------------------------------
     $triggers = @()
     foreach ($spec in @($Plan.Triggers)) {
-        $triggers += ConvertTo-PSTaskCimTrigger -Spec $spec
+        $triggers += ConvertTo-PSTSMCimTrigger -Spec $spec
     }
 
     # --- principal ---------------------------------------------------------------------
@@ -164,13 +164,13 @@ function Register-PSTaskPlan {
     if ($PassThru) { $registered }
 }
 
-function ConvertTo-PSTaskCimTrigger {
+function ConvertTo-PSTSMCimTrigger {
     <#
     .SYNOPSIS
-        Converts one New-PSTaskTriggerSpec object into the CIM trigger instance
+        Converts one New-PSTSMTriggerSpec object into the CIM trigger instance
         Register-ScheduledTask expects.
     .PARAMETER Spec
-        A PSTaskBuilder.TriggerSpec object.
+        A PSTSM.TriggerSpec object.
     .OUTPUTS
         A scheduled task trigger CIM instance.
     #>
