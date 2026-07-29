@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # PSTaskBuilderUI.Common.ps1
 # Shared WinForms scaffolding: theme, control factories, and the host setup every window needs.
 #

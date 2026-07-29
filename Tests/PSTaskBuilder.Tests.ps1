@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 #Requires -Modules Pester
 <#
     Offline unit tests for the PSTaskBuilder engine. Nothing here registers a real scheduled

@@ -1,5 +1,7 @@
 # PSTaskBuilder
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 Build, validate, register and edit Windows scheduled tasks that run PowerShell scripts —
 with the launch boilerplate derived from the script instead of retyped every time.
 
@@ -362,6 +364,38 @@ requires elevation.
 Set `PSTASKBUILDER_NODIALOG=1` in any automated run. Without it, an exception inside a WinForms
 handler reaches the global handler and pops a modal message box on the desktop of whoever is at
 the machine.
+
+## Licence
+
+**GPL-3.0-or-later.** Copyright © 2026 Krytical13. Full text in [LICENSE](LICENSE).
+
+In plain terms:
+
+| | |
+|---|---|
+| Use it at work, on any number of machines | ✅ yes, internal use has no obligations |
+| Use it on billable client work | ✅ yes |
+| Fork it, change it, publish your version | ✅ yes — under GPL-3.0 too |
+| Sell it, or sell support for it | ✅ yes — the GPL does not forbid charging money |
+| Ship it inside a **closed-source** product | ❌ no — derivatives must ship their source |
+
+That last row is the whole point. The intent is that anyone can use and improve this freely,
+and nobody can take it closed-source and resell it as their own.
+
+The **name** is handled separately — see [TRADEMARK.md](TRADEMARK.md). Short version: fork
+freely, but give a substantially changed version its own name.
+
+## Contributing
+
+Issues and pull requests are welcome. By contributing you agree your contribution is licensed
+under GPL-3.0-or-later, the same as the rest of the project.
+
+Two things worth reading first:
+
+- The **Verified behaviour** section above. Several things that look like over-engineering are
+  load-bearing and were established by experiment; the comments say which and why.
+- Run both suites under **`powershell.exe`** as well as `pwsh`. Windows PowerShell 5.1 is where
+  the binder bugs surface, and the UI form tests skip themselves under MTA.
 
 ## Next
 
