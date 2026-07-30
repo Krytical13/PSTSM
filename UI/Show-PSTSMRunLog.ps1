@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSMRunLog {
     <#
     .SYNOPSIS
@@ -20,7 +20,9 @@ function Show-PSTSMRunLog {
     .PARAMETER SelfTest
         Test seam. Shows, pumps and closes inside this function.
     .PARAMETER BuildOnly
-        Test seam. Returns the Form without showing it.
+        Test seam. Realises the window off-screen without activating it, pumps the message loop
+        briefly, then closes it. It does NOT return the form - the handlers close over this
+        function's locals, which are gone once it returns.
     .OUTPUTS
         None.
     .EXAMPLE
@@ -111,7 +113,7 @@ function Show-PSTSMRunLog {
 
     if ($BuildOnly) { return $form }
     if ($SelfTest) {
-        $form.WindowState = 'Minimized'; $form.ShowInTaskbar = $false; $form.Show()
+        Show-PSTSMUIForTest -Form $form
         for ($i = 0; $i -lt 15; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10 }
         if (-not $form.IsDisposed) { $form.Close(); $form.Dispose() }
         return

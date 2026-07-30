@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSMTriggerDialog {
     <#
     .SYNOPSIS
@@ -16,7 +16,10 @@ function Show-PSTSMTriggerDialog {
         Parent form, for correct modal centring.
     .PARAMETER SelfTest
         Test seam. Builds the dialog, selects a daily 07:00 trigger, clicks OK through the real
-        handler and returns the result without showing anything.
+        handler and returns the result. The form IS shown briefly and off-screen - PerformClick
+        goes through CanSelect, which is false on a form that has never been shown, so a hidden
+        form would swallow the click and the seam would prove nothing. Not to be confused with
+        -BuildOnly elsewhere in the module, which genuinely shows nothing.
     .OUTPUTS
         [pscustomobject] the trigger spec, or $null if cancelled.
     .EXAMPLE
@@ -255,9 +258,7 @@ function Show-PSTSMTriggerDialog {
         # click is silently a no-op and this seam would prove nothing.
         $cboType.SelectedItem = 'Daily'
         $dtTime.Value = [datetime]::Today.AddHours(7)
-        $form.WindowState = 'Minimized'
-        $form.ShowInTaskbar = $false
-        $form.Show()
+        Show-PSTSMUIForTest -Form $form
         for ($i = 0; $i -lt 10; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10 }
 
         $btnOk.PerformClick()

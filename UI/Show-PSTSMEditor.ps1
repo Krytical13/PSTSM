@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSMEditor {
     <#
     .SYNOPSIS
@@ -29,7 +29,8 @@ function Show-PSTSMEditor {
         function returns, its stack frame is gone and the event handlers can no longer resolve
         the locals they close over, so do not Show() the returned form. Use -SelfTest for that.
     .PARAMETER SelfTest
-        Test seam. Shows the window minimised, pumps the message loop briefly, then closes it -
+        Test seam. Realises the window off-screen without activating it, pumps the message loop
+        briefly, then closes it -
         all inside this function, so handlers still see their locals. This is the only way to
         catch show-time failures; DrawToBitmap renders chrome and misses them entirely.
     .OUTPUTS
@@ -438,18 +439,26 @@ function Show-PSTSMEditor {
 
         $logonType = & $getLogonType
 
-        $settings = @{
-            MultipleInstances          = [string]$cboInstances.SelectedItem
-            StartWhenAvailable         = $chkStartWhenAvail.Checked
-            ExecutionTimeLimit         = $txtTimeLimit.Text.Trim()
-            RestartCount               = 0
-            RestartInterval            = $txtRestartInterval.Text.Trim()
-            DisallowStartIfOnBatteries = $chkBatteryStop.Checked
-            StopIfGoingOnBatteries     = $chkBatteryStop.Checked
-            RunOnlyIfNetworkAvailable  = $chkNetwork.Checked
-            WakeToRun                  = $chkWake.Checked
-            Hidden                     = $chkHidden.Checked
+        # Start from what the task already had, then overlay only the keys this form actually
+        # controls. Rebuilding the hashtable from scratch dropped every setting without a control
+        # on screen - RunOnlyIfIdle, AllowDemandStart, DontStopOnIdleEnd, Priority and
+        # Compatibility - so opening an existing task and pressing Save silently reset five
+        # settings to New-PSTSMPlan's defaults. This is also what $state.Settings is for; it was
+        # being seeded from the plan and then never read.
+        $settings = @{}
+        if ($state.Settings) {
+            foreach ($k in $state.Settings.Keys) { $settings[$k] = $state.Settings[$k] }
         }
+        $settings['MultipleInstances'] = [string]$cboInstances.SelectedItem
+        $settings['StartWhenAvailable'] = $chkStartWhenAvail.Checked
+        $settings['ExecutionTimeLimit'] = $txtTimeLimit.Text.Trim()
+        $settings['RestartInterval'] = $txtRestartInterval.Text.Trim()
+        $settings['DisallowStartIfOnBatteries'] = $chkBatteryStop.Checked
+        $settings['StopIfGoingOnBatteries'] = $chkBatteryStop.Checked
+        $settings['RunOnlyIfNetworkAvailable'] = $chkNetwork.Checked
+        $settings['WakeToRun'] = $chkWake.Checked
+        $settings['Hidden'] = $chkHidden.Checked
+        if (-not $settings.ContainsKey('RestartCount')) { $settings['RestartCount'] = 0 }
         $rc = 0
         if ([int]::TryParse($txtRestartCount.Text.Trim(), [ref]$rc)) { $settings['RestartCount'] = $rc }
 
@@ -1225,9 +1234,7 @@ function Show-PSTSMEditor {
     if ($SelfTest) {
         # Shown from inside this function so the handlers' locals are still on the stack,
         # exactly as they are under ShowDialog.
-        $form.WindowState = 'Minimized'
-        $form.ShowInTaskbar = $false
-        $form.Show()
+        Show-PSTSMUIForTest -Form $form
         for ($i = 0; $i -lt 40; $i++) {
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 15

@@ -194,7 +194,7 @@ function ConvertFrom-PSTSMAction {
             $result.IsRecognized = $true
         }
         else {
-            $notes.Add('Task uses -Command with inline code rather than a script file. Edit as raw arguments.')
+            $notes.Add('Task uses -Command with inline code rather than a script file, so this editor shows it read-only. Change it in Task Scheduler, or rebuild it here against a .ps1.')
         }
         $result.Notes = $notes.ToArray()
         return $result

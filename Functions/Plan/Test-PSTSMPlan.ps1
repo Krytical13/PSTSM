@@ -46,9 +46,7 @@ function Test-PSTSMPlan {
 
         [switch]$SkipExistingTaskCheck,
 
-        [bool]$IsElevated = (New-Object Security.Principal.WindowsPrincipal(
-                [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
-            [Security.Principal.WindowsBuiltInRole]::Administrator),
+        [bool]$IsElevated = (Test-PSTSMElevated),
 
         [switch]$CanElevate
     )

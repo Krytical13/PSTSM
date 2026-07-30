@@ -53,9 +53,9 @@ function Test-PSTSMGmsaPrerequisite {
     Add-GmsaCheck 'GMSAPRE_RSAT_OK' 'Ok' 'ActiveDirectory module available' $null $null
 
     # --- elevation ----------------------------------------------------------------------
+    # $identity is still needed below, to name who the tool is acting as.
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $elevated = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    $elevated = (Test-PSTSMElevated)
     if ($elevated) {
         Add-GmsaCheck 'GMSAPRE_ELEVATED_OK' 'Ok' 'Running elevated' $null $null
     }

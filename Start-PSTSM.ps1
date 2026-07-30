@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+
 <#
 .SYNOPSIS
-    Launches the PSTSM window, elevating and switching to STA as needed.
+    Launches the PSTSM window, switching to STA and elevating only if asked.
 .DESCRIPTION
     The entry point. Double-clicking PSTSM.cmd runs this; it can also be called directly.
 
@@ -9,16 +10,21 @@
     a task that runs as themselves, so demanding a UAC prompt up front would lock out exactly
     the people managing their own work, and would be heavier-handed than the tool it replaces.
 
-    Microsoft's rule (Security Contexts for Tasks) is precise about where the line is. From a
-    low-privilege process you cannot register a task with RunLevel HIGHEST, nor as Local System,
-    Builtin\Administrator or a group. Everything else - registering, editing and deleting a task
-    that runs as you at normal privilege - works without elevation, as does the whole read-only
-    side: the list, the editor, the health sweep, run logs.
+    The line is narrow, and it was measured rather than taken on trust: with a genuine
+    UAC-filtered token (TokenElevationType=3) RunLevel=Limited registers and RunLevel=Highest
+    comes back "Access is denied". The same goes for a service account, a group principal and an
+    at-startup trigger. Everything else - registering, editing and deleting a task that runs as
+    you at normal privilege - works unelevated, as does the whole read-only side: the list, the
+    editor, the health sweep, run logs.
 
-    So elevation is treated as a property of what you are trying to DO, not of opening the tool.
-    The preflight raises it as a blocking error the moment a plan needs rights this session does
-    not have, and the main window offers to restart elevated at that point. Use -Elevated to ask
-    for it up front instead.
+    So elevation belongs to what a task DOES, not to opening the tool. When a plan needs rights
+    this session does not have, the Save button takes a UAC shield and elevates for that one
+    registration through a short-lived helper - one consent prompt, no restart, and everything
+    typed into the editor is still there afterwards. Declining the prompt does nothing at all.
+
+    Use -Elevated to hold an administrator token for the whole session instead. That is the
+    better option for a run of privileged work - installing a gMSA, granting the batch-logon
+    right - where per-save prompts would just be a nuisance.
 
     The apartment still has to be sorted before a window can open: WinForms requires STA, and
     while powershell.exe has defaulted to STA since v3, pwsh starts MTA, where showing a form

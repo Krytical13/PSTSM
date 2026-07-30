@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Register-PSTSMPlan {
     <#
     .SYNOPSIS
@@ -28,7 +28,12 @@ function Register-PSTSMPlan {
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
-        [Parameter(Mandatory)]
+        # ValueFromPipeline so the documented config-as-code flow actually runs:
+        #   Import-PSTSMPlan -Path .\Plans\Nightly.task.json | Register-PSTSMPlan
+        # That example ships in the README and in Export-PSTSMPlan's help, and failed at bind
+        # time - there was no pipeline binding and no process block, so a piped plan never
+        # arrived, and piping several would have registered only the last.
+        [Parameter(Mandatory, ValueFromPipeline)]
         [object]$Plan,
 
         [securestring]$Password,
@@ -37,131 +42,148 @@ function Register-PSTSMPlan {
 
         [switch]$PassThru
     )
+    process {
 
-    # --- preflight ---------------------------------------------------------------------
-    $checks = Test-PSTSMPlan -Plan $Plan
-    $errors = @($checks | Where-Object { $_.Severity -eq 'Error' })
-    if ($errors.Count -gt 0 -and -not $Force) {
-        $detail = ($errors | ForEach-Object { "  [$($_.Id)] $($_.Title): $($_.Detail)" }) -join [Environment]::NewLine
-        throw ("Preflight failed with $($errors.Count) error(s). Fix them or use -Force:" + [Environment]::NewLine + $detail)
+        # --- preflight ---------------------------------------------------------------------
+        $checks = Test-PSTSMPlan -Plan $Plan
+        $errors = @($checks | Where-Object { $_.Severity -eq 'Error' })
+        if ($errors.Count -gt 0 -and -not $Force) {
+            $detail = ($errors | ForEach-Object { "  [$($_.Id)] $($_.Title): $($_.Detail)" }) -join [Environment]::NewLine
+            throw ("Preflight failed with $($errors.Count) error(s). Fix them or use -Force:" + [Environment]::NewLine + $detail)
+        }
+        foreach ($w in @($checks | Where-Object { $_.Severity -eq 'Warning' })) {
+            Write-Warning "[$($w.Id)] $($w.Title): $($w.Detail)"
+        }
+
+        if ($Plan.Principal.LogonType -eq 'Password' -and -not $Password) {
+            throw "Principal.LogonType is 'Password' but no -Password was supplied. For a group managed service account use LogonType 'gMSA', which needs none."
+        }
+
+        # --- action ------------------------------------------------------------------------
+        $targetScript = $Plan.ScriptPath
+        if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript') {
+            $targetScript = New-PSTSMLogWrapper -Plan $Plan
+            Write-Verbose "Action targets log wrapper: $targetScript"
+        }
+
+        $argumentString = ConvertTo-PSTSMArgument -ScriptPath $targetScript `
+            -Parameters $Plan.Parameters `
+            -ExtraArguments $Plan.ExtraArguments `
+            -ExecutionPolicy $Plan.ExecutionPolicy `
+            -NoProfile $Plan.NoProfile `
+            -NonInteractive $Plan.NonInteractive `
+            -WindowStyle $Plan.WindowStyle
+
+        $actionParams = @{
+            Execute  = $Plan.EnginePath
+            Argument = $argumentString
+        }
+        if ($Plan.WorkingDirectory) { $actionParams['WorkingDirectory'] = $Plan.WorkingDirectory }
+        $action = New-ScheduledTaskAction @actionParams
+
+        # --- triggers ----------------------------------------------------------------------
+        $triggers = @()
+        foreach ($spec in @($Plan.Triggers)) {
+            $triggers += ConvertTo-PSTSMCimTrigger -Spec $spec
+        }
+
+        # --- principal ---------------------------------------------------------------------
+        # A gMSA is registered as LogonType Password with NO password: Task Scheduler retrieves the
+        # managed password from the directory itself. There is no gMSA-specific value in
+        # TASK_LOGON_TYPE, which is why the plan models it separately and collapses it here.
+        $effectiveLogonType = $Plan.Principal.LogonType
+        if ($effectiveLogonType -eq 'gMSA') { $effectiveLogonType = 'Password' }
+
+        $principalParams = @{ LogonType = $effectiveLogonType }
+        if ($Plan.Principal.LogonType -eq 'Group') {
+            $principalParams['GroupId'] = $Plan.Principal.UserId
+        }
+        else {
+            $principalParams['UserId'] = $Plan.Principal.UserId
+            # RunLevel is meaningless for Group principals and rejected for some built-ins.
+            $principalParams['RunLevel'] = $Plan.Principal.RunLevel
+        }
+        $principal = New-ScheduledTaskPrincipal @principalParams
+
+        # --- settings ----------------------------------------------------------------------
+        $s = $Plan.Settings
+        $settingsParams = @{
+            MultipleInstances = $s.MultipleInstances
+            Compatibility     = $s.Compatibility
+            Priority          = $s.Priority
+        }
+        if ($s.StartWhenAvailable) { $settingsParams['StartWhenAvailable'] = $true }
+        if ($s.RunOnlyIfNetworkAvailable) { $settingsParams['RunOnlyIfNetworkAvailable'] = $true }
+        if ($s.WakeToRun) { $settingsParams['WakeToRun'] = $true }
+        if ($s.Hidden) { $settingsParams['Hidden'] = $true }
+        if ($s.RunOnlyIfIdle) { $settingsParams['RunOnlyIfIdle'] = $true }
+        if ($s.DontStopOnIdleEnd) { $settingsParams['DontStopOnIdleEnd'] = $true }
+
+        # The cmdlet exposes these as the positive form of the opposite condition.
+        if (-not $s.DisallowStartIfOnBatteries) { $settingsParams['AllowStartIfOnBatteries'] = $true }
+        if (-not $s.StopIfGoingOnBatteries) { $settingsParams['DontStopIfGoingOnBatteries'] = $true }
+
+        if ($s.ExecutionTimeLimit -and $s.ExecutionTimeLimit -ne '00:00:00') {
+            $settingsParams['ExecutionTimeLimit'] = [timespan]::Parse($s.ExecutionTimeLimit)
+        }
+        if ($s.RestartCount -and [int]$s.RestartCount -gt 0) {
+            $settingsParams['RestartCount'] = [int]$s.RestartCount
+            # RestartInterval is mandatory whenever RestartCount is set, and must be >= 1 minute.
+            $interval = if ($s.RestartInterval) { [timespan]::Parse($s.RestartInterval) } else { [timespan]::FromMinutes(5) }
+            if ($interval.TotalMinutes -lt 1) { $interval = [timespan]::FromMinutes(1) }
+            $settingsParams['RestartInterval'] = $interval
+        }
+
+        $settings = New-ScheduledTaskSettingsSet @settingsParams
+        # Not exposed as a cmdlet parameter; set on the instance.
+        if ($null -ne $s.AllowDemandStart) { $settings.AllowDemandStart = [bool]$s.AllowDemandStart }
+
+        # --- register ----------------------------------------------------------------------
+        $newTaskParams = @{
+            Action    = $action
+            Principal = $principal
+            Settings  = $settings
+        }
+        if ($triggers.Count -gt 0) { $newTaskParams['Trigger'] = $triggers }
+        if ($Plan.Description) { $newTaskParams['Description'] = $Plan.Description }
+
+        $definition = New-ScheduledTask @newTaskParams
+
+        $target = "$($Plan.TaskPath)$($Plan.TaskName)"
+        if (-not $PSCmdlet.ShouldProcess($target, 'Register scheduled task')) { return }
+
+        $registerParams = @{
+            TaskName    = $Plan.TaskName
+            TaskPath    = $Plan.TaskPath
+            InputObject = $definition
+            Force       = $true
+        }
+        $bstr = [IntPtr]::Zero
+        try {
+            if ($Plan.Principal.LogonType -eq 'Password') {
+                # The BSTR has to be zero-freed, not just abandoned. Without this the cleartext
+                # password stays in the process heap until something happens to overwrite it.
+                #
+                # Being honest about the limit of this: Register-ScheduledTask takes -Password as a
+                # System.String, so a managed cleartext copy exists regardless and cannot be wiped.
+                # Zero-freeing the BSTR removes the copy we are responsible for; it does not make the
+                # password absent from memory. Registering through the elevated helper is the better
+                # answer, because that process is short-lived.
+                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+                $registerParams['User'] = $Plan.Principal.UserId
+                $registerParams['Password'] = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+            }
+
+            $registered = Register-ScheduledTask @registerParams
+        }
+        finally {
+            if ($bstr -ne [IntPtr]::Zero) {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+        }
+
+        if ($PassThru) { $registered }
     }
-    foreach ($w in @($checks | Where-Object { $_.Severity -eq 'Warning' })) {
-        Write-Warning "[$($w.Id)] $($w.Title): $($w.Detail)"
-    }
-
-    if ($Plan.Principal.LogonType -eq 'Password' -and -not $Password) {
-        throw "Principal.LogonType is 'Password' but no -Password was supplied. For a group managed service account use LogonType 'gMSA', which needs none."
-    }
-
-    # --- action ------------------------------------------------------------------------
-    $targetScript = $Plan.ScriptPath
-    if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript') {
-        $targetScript = New-PSTSMLogWrapper -Plan $Plan
-        Write-Verbose "Action targets log wrapper: $targetScript"
-    }
-
-    $argumentString = ConvertTo-PSTSMArgument -ScriptPath $targetScript `
-        -Parameters $Plan.Parameters `
-        -ExtraArguments $Plan.ExtraArguments `
-        -ExecutionPolicy $Plan.ExecutionPolicy `
-        -NoProfile $Plan.NoProfile `
-        -NonInteractive $Plan.NonInteractive `
-        -WindowStyle $Plan.WindowStyle
-
-    $actionParams = @{
-        Execute  = $Plan.EnginePath
-        Argument = $argumentString
-    }
-    if ($Plan.WorkingDirectory) { $actionParams['WorkingDirectory'] = $Plan.WorkingDirectory }
-    $action = New-ScheduledTaskAction @actionParams
-
-    # --- triggers ----------------------------------------------------------------------
-    $triggers = @()
-    foreach ($spec in @($Plan.Triggers)) {
-        $triggers += ConvertTo-PSTSMCimTrigger -Spec $spec
-    }
-
-    # --- principal ---------------------------------------------------------------------
-    # A gMSA is registered as LogonType Password with NO password: Task Scheduler retrieves the
-    # managed password from the directory itself. There is no gMSA-specific value in
-    # TASK_LOGON_TYPE, which is why the plan models it separately and collapses it here.
-    $effectiveLogonType = $Plan.Principal.LogonType
-    if ($effectiveLogonType -eq 'gMSA') { $effectiveLogonType = 'Password' }
-
-    $principalParams = @{ LogonType = $effectiveLogonType }
-    if ($Plan.Principal.LogonType -eq 'Group') {
-        $principalParams['GroupId'] = $Plan.Principal.UserId
-    }
-    else {
-        $principalParams['UserId'] = $Plan.Principal.UserId
-        # RunLevel is meaningless for Group principals and rejected for some built-ins.
-        $principalParams['RunLevel'] = $Plan.Principal.RunLevel
-    }
-    $principal = New-ScheduledTaskPrincipal @principalParams
-
-    # --- settings ----------------------------------------------------------------------
-    $s = $Plan.Settings
-    $settingsParams = @{
-        MultipleInstances = $s.MultipleInstances
-        Compatibility     = $s.Compatibility
-        Priority          = $s.Priority
-    }
-    if ($s.StartWhenAvailable) { $settingsParams['StartWhenAvailable'] = $true }
-    if ($s.RunOnlyIfNetworkAvailable) { $settingsParams['RunOnlyIfNetworkAvailable'] = $true }
-    if ($s.WakeToRun) { $settingsParams['WakeToRun'] = $true }
-    if ($s.Hidden) { $settingsParams['Hidden'] = $true }
-    if ($s.RunOnlyIfIdle) { $settingsParams['RunOnlyIfIdle'] = $true }
-    if ($s.DontStopOnIdleEnd) { $settingsParams['DontStopOnIdleEnd'] = $true }
-
-    # The cmdlet exposes these as the positive form of the opposite condition.
-    if (-not $s.DisallowStartIfOnBatteries) { $settingsParams['AllowStartIfOnBatteries'] = $true }
-    if (-not $s.StopIfGoingOnBatteries) { $settingsParams['DontStopIfGoingOnBatteries'] = $true }
-
-    if ($s.ExecutionTimeLimit -and $s.ExecutionTimeLimit -ne '00:00:00') {
-        $settingsParams['ExecutionTimeLimit'] = [timespan]::Parse($s.ExecutionTimeLimit)
-    }
-    if ($s.RestartCount -and [int]$s.RestartCount -gt 0) {
-        $settingsParams['RestartCount'] = [int]$s.RestartCount
-        # RestartInterval is mandatory whenever RestartCount is set, and must be >= 1 minute.
-        $interval = if ($s.RestartInterval) { [timespan]::Parse($s.RestartInterval) } else { [timespan]::FromMinutes(5) }
-        if ($interval.TotalMinutes -lt 1) { $interval = [timespan]::FromMinutes(1) }
-        $settingsParams['RestartInterval'] = $interval
-    }
-
-    $settings = New-ScheduledTaskSettingsSet @settingsParams
-    # Not exposed as a cmdlet parameter; set on the instance.
-    if ($null -ne $s.AllowDemandStart) { $settings.AllowDemandStart = [bool]$s.AllowDemandStart }
-
-    # --- register ----------------------------------------------------------------------
-    $newTaskParams = @{
-        Action    = $action
-        Principal = $principal
-        Settings  = $settings
-    }
-    if ($triggers.Count -gt 0) { $newTaskParams['Trigger'] = $triggers }
-    if ($Plan.Description) { $newTaskParams['Description'] = $Plan.Description }
-
-    $definition = New-ScheduledTask @newTaskParams
-
-    $target = "$($Plan.TaskPath)$($Plan.TaskName)"
-    if (-not $PSCmdlet.ShouldProcess($target, 'Register scheduled task')) { return }
-
-    $registerParams = @{
-        TaskName    = $Plan.TaskName
-        TaskPath    = $Plan.TaskPath
-        InputObject = $definition
-        Force       = $true
-    }
-    if ($Plan.Principal.LogonType -eq 'Password') {
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password))
-        $registerParams['User'] = $Plan.Principal.UserId
-        $registerParams['Password'] = $plain
-    }
-
-    $registered = Register-ScheduledTask @registerParams
-
-    if ($PassThru) { $registered }
 }
 
 function ConvertTo-PSTSMCimTrigger {
@@ -206,16 +228,29 @@ function ConvertTo-PSTSMCimTrigger {
         default { throw "Unsupported trigger type '$($Spec.Type)'." }
     }
 
-    # RandomDelay applies to time-based triggers; boot/logon triggers use a fixed Delay. The
-    # cmdlet maps both from -RandomDelay, so try it and fall through quietly if rejected.
-    $delayValue = if ($Spec.Type -in @('AtStartup', 'AtLogOn')) { $Spec.Delay } else { $Spec.RandomDelay }
+    # Time-based triggers randomise with RandomDelay; boot and logon triggers take a fixed Delay.
+    # They are different CIM properties on different classes, and the cmdlet does NOT map one to
+    # the other: MSFT_TaskBootTrigger and MSFT_TaskLogonTrigger have Delay and no RandomDelay at
+    # all. Passing -RandomDelay to -AtStartup is accepted without error and simply produces a
+    # trigger with Delay empty, so the operator's delay was discarded in silence - and the
+    # trigger dialog offers that field for exactly those two types.
+    $isFixedDelay = $Spec.Type -in @('AtStartup', 'AtLogOn')
+    $delayValue = if ($isFixedDelay) { $Spec.Delay } else { $Spec.RandomDelay }
+    $delaySpan = $null
     if ($delayValue) {
-        try { $params['RandomDelay'] = [timespan]::Parse($delayValue) }
+        try { $delaySpan = [timespan]::Parse($delayValue) }
         catch { Write-Warning "Ignoring unparseable delay '$delayValue' on $($Spec.Type) trigger." }
     }
+    # RandomDelay can go in as a cmdlet parameter; Delay has to be set on the instance afterwards.
+    if ($delaySpan -and -not $isFixedDelay) { $params['RandomDelay'] = $delaySpan }
 
     $trigger = New-ScheduledTaskTrigger @params
     $trigger.Enabled = [bool]$Spec.Enabled
+
+    if ($delaySpan -and $isFixedDelay) {
+        # ISO 8601 duration: the CIM property is a string, not a TimeSpan.
+        $trigger.Delay = [System.Xml.XmlConvert]::ToString($delaySpan)
+    }
 
     if ($Spec.RepetitionInterval) {
         # New-ScheduledTaskTrigger only accepts -RepetitionInterval alongside -Once, so build a

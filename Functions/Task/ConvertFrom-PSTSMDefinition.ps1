@@ -11,9 +11,9 @@ function ConvertFrom-PSTSMDefinition {
         Fidelity rules:
           - A task whose action this tool understands (-File against a .ps1) round-trips fully.
           - A task built some other way still produces a plan, but IsFullyRecognized is $false
-            and RawAction carries the original Execute/Arguments untouched. The UI must show
-            a raw-arguments box in that case; silently rewriting somebody's working task into
-            our preferred shape is how you break production at 3am.
+            and RawAction carries the original Execute/Arguments untouched. The editor shows
+            that action read-only and disables Save; silently rewriting somebody's working task
+            into our preferred shape is how you break production at 3am.
           - Settings and triggers are read from the live task, so anything set outside this
             tool survives an edit here.
     .PARAMETER Task

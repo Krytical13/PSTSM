@@ -372,7 +372,8 @@ Do not "tidy" any of them without re-running the experiment.
 
 ## Commands
 
-**Script analysis** — `Get-PSTSMScriptProfile`, `Get-PSTSMEngine`
+**Script analysis** — `Get-PSTSMScriptProfile`, `Get-PSTSMEngine`,
+`Get-PSTSMScriptConfigFile`, `Resolve-PSTSMDefaultValue`
 
 **Plan** — `New-PSTSMPlan`, `New-PSTSMTriggerSpec`, `Test-PSTSMPlan`,
 `ConvertTo-PSTSMArgument`, `ConvertTo-PSTSMQuotedValue`, `Export-PSTSMPlan`,
@@ -383,7 +384,18 @@ Do not "tidy" any of them without re-running the experiment.
 `ConvertFrom-PSTSMCimTrigger`, `ConvertFrom-PSTSMDuration`, `ConvertFrom-PSTSMResultCode`,
 `ConvertFrom-PSTSMTriggerSummary`
 
-**UI** — `Show-PSTSM`, `Show-PSTSMEditor`, `Show-PSTSMTriggerDialog`
+**Health, origin and run logs** — `Test-PSTSMHealth`, `Get-PSTSMTaskOrigin`,
+`Get-PSTSMTaskRunLog`
+
+**Elevation** — `Test-PSTSMElevated`, `Test-PSTSMPlanNeedsElevation`,
+`Invoke-PSTSMElevatedRegistration`
+
+**Accounts and gMSA** — `Get-PSTSMRunAsAccount`, `Test-PSTSMGmsaPrerequisite`,
+`New-PSTSMGmsa`, `Install-PSTSMGmsa`, `Grant-PSTSMBatchLogonRight`
+
+**UI** — `Show-PSTSM`, `Show-PSTSMEditor`, `Show-PSTSMTriggerDialog`,
+`Show-PSTSMGmsaDialog`, `Show-PSTSMAccountPicker`, `Show-PSTSMHealth`, `Show-PSTSMRunLog`,
+`Initialize-PSTSMUIHost`
 
 The engine never references the UI, so it stays usable from a console, a build agent, or a
 scheduled task of its own.
@@ -398,9 +410,11 @@ Splitting the handlers into separate functions would break them at runtime, not 
 
 `ConvertFrom-PSTSMDefinition` sets `IsFullyRecognized = $false` and preserves the original
 `Execute`/`Arguments` in `RawAction` when a task was built some other way — inline `-Command`
-code, a non-PowerShell action, or multiple actions. The UI must offer a raw-arguments box in
-that case. Silently rewriting somebody's working task into our preferred shape is how you
-break production.
+code, a non-PowerShell action, or multiple actions. The editor then shows that action **read-only
+and disables Save**, so the task can be inspected but not rewritten. Silently reshaping somebody's
+working task into our preferred form is how you break production, and an editable free-text box
+would be the same mistake with extra steps: it invites exactly the rewrite the guarantee exists
+to prevent. Change those in Task Scheduler, or rebuild them here deliberately.
 
 ## Tests
 
@@ -418,7 +432,10 @@ Note that `Install-Module -Scope CurrentUser` from `pwsh` puts Pester in `Docume
 which Windows PowerShell **cannot see** — it looks in `Documents\WindowsPowerShell\`. Install it
 from whichever host you intend to test with, or import it by full path.
 
-Nothing in either suite registers a real scheduled task. The engine suite is offline apart from
+Neither suite writes to Task Scheduler — nothing registers, edits or deletes a task, so it is
+safe to run on a working machine. Some engine tests do *read* live task state deliberately;
+parsing every task on the machine is what caught bugs no fixture would have. The engine suite is
+otherwise offline apart from
 one test that launches PowerShell to prove wrapper argument forwarding. The UI suite lints for
 the 5.1 hazards above, builds every window headlessly and asserts control bounds, then shows
 and pumps them with a thread-exception trap — `DrawToBitmap` renders chrome only and misses

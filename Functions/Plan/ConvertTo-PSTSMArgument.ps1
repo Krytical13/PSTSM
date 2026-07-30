@@ -52,12 +52,15 @@ function ConvertTo-PSTSMArgument {
         Only values that need quoting get quoted, so the preview stays readable.
     .EXAMPLE
         ConvertTo-PSTSMArgument -ScriptPath 'C:\My Scripts\Run.ps1' `
-                                 -Parameters ([ordered]@{ OutDir = 'C:\Logs\'; Note = 'said "hi"' })
+                                 -Parameters ([ordered]@{ OutDir = 'C:\My Logs\'; Note = 'said "hi"' })
 
-        ... -File "C:\My Scripts\Run.ps1" -OutDir "C:\Logs\\" -Note "said \"hi\""
+        ... -File "C:\My Scripts\Run.ps1" -OutDir "C:\My Logs\\" -Note "said \"hi\""
 
         The doubled trailing backslash and the escaped quotes are what CreateProcess needs to
-        deliver the original values; PowerShell receives C:\Logs\ and said "hi".
+        deliver the original values; PowerShell receives C:\My Logs\ and said "hi".
+
+        Note the doubling only appears once a value is quoted at all. 'C:\Logs\' has no space in
+        it, so it emits bare as -OutDir C:\Logs\ and needs no escaping.
     #>
     [CmdletBinding()]
     param(

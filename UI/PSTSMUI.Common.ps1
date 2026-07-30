@@ -24,9 +24,50 @@ if (-not ('PSTSMNative.Win32' -as [type])) {
         Add-Type -Namespace 'PSTSMNative' -Name 'Win32' -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern System.IntPtr SendMessage(System.IntPtr hWnd, int msg, System.IntPtr wParam, string lParam);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
 '@ -ErrorAction Stop
     }
     catch { Write-Verbose "Cue-banner interop unavailable: $($_.Exception.Message)" }
+}
+
+function Show-PSTSMUIForTest {
+    <#
+    .SYNOPSIS
+        Realises a form for a test seam without stealing focus from whoever is at the machine.
+    .DESCRIPTION
+        Several seams have to SHOW the form rather than merely build it: PerformClick goes
+        through CanSelect, which is false on a form that has never been shown, so a click on an
+        unshown form is silently a no-op and would prove nothing.
+
+        The obvious way to do that quietly - WindowState='Minimized' plus Show() - is not quiet
+        at all. Show() activates the window, so running the UI suite yanked focus away once per
+        dialog and left the operator's own window behind. SW_SHOWNOACTIVATE displays the window
+        without activating it, and parking it off-screen keeps it from flashing up as well.
+
+        Falls back to a plain Show() if the interop is unavailable, because a noisy test run is
+        better than one that cannot run at all.
+    .PARAMETER Form
+        The form to realise.
+    .EXAMPLE
+        Show-PSTSMUIForTest -Form $form
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Windows.Forms.Form]$Form)
+
+    $Form.StartPosition = 'Manual'
+    $Form.Location = New-Object System.Drawing.Point(-32000, -32000)
+    $Form.ShowInTaskbar = $false
+
+    if ('PSTSMNative.Win32' -as [type]) {
+        $handle = $Form.Handle          # forces handle creation without showing
+        [void][PSTSMNative.Win32]::ShowWindow($handle, 4)   # SW_SHOWNOACTIVATE
+    }
+    else {
+        $Form.WindowState = 'Minimized'
+        $Form.Show()
+    }
 }
 
 function Set-PSTSMUICueBanner {

@@ -189,16 +189,25 @@ function Invoke-PSTSMElevatedRegistration {
         # warning, the old privileged task kept firing alongside its replacement.
         $argLine = ($helperArgs | ForEach-Object { ConvertTo-PSTSMQuotedValue -Value $_ }) -join ' '
 
+        # ProcessStartInfo rather than Start-Process, so the ShellExecute failure arrives intact.
+        # Start-Process wraps it in an InvalidOperationException with the Win32Exception discarded,
+        # which made the catch below unreachable: declining the consent prompt - the single most
+        # likely outcome of showing one - fell through to the generic handler and put an error
+        # dialog on screen for what is simply the operator saying no.
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $psExe
+        $psi.Arguments = $argLine
+        $psi.UseShellExecute = $true          # required for the runas verb, and precludes redirection
+        $psi.Verb = 'runas'
+        $psi.WindowStyle = if ($needsPassword) {
+            [System.Diagnostics.ProcessWindowStyle]::Normal
+        }
+        else {
+            [System.Diagnostics.ProcessWindowStyle]::Hidden
+        }
+
         try {
-            $startArgs = @{
-                FilePath     = $psExe
-                ArgumentList = $argLine
-                Verb         = 'RunAs'
-                PassThru     = $true
-                ErrorAction  = 'Stop'
-                WindowStyle  = if ($needsPassword) { 'Normal' } else { 'Hidden' }
-            }
-            $proc = Start-Process @startArgs
+            $proc = [System.Diagnostics.Process]::Start($psi)
         }
         catch [System.ComponentModel.Win32Exception] {
             # 1223 ERROR_CANCELLED is the operator dismissing the UAC prompt. That is a decision,

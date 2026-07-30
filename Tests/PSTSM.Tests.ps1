@@ -1,8 +1,15 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 #Requires -Modules Pester
+
 <#
-    Offline unit tests for the PSTSM engine. Nothing here registers a real scheduled
-    task or touches Task Scheduler; every check runs against fixture scripts in $TestDrive.
+    Unit tests for the PSTSM engine. Nothing here writes to Task Scheduler - no test registers,
+    edits or deletes a task, so the suite is safe to run on a working machine. Most checks run
+    entirely against fixture scripts in $TestDrive.
+
+    Some tests do READ live Task Scheduler state, deliberately: parsing every task on the machine
+    is what caught the tokeniser and health-check bugs that fixtures never would. Those are
+    read-only, and they adapt to whatever the machine happens to have rather than requiring
+    anything of it.
 
     Run:  Invoke-Pester -Path .\PSTSM.Tests.ps1
 
@@ -1419,6 +1426,63 @@ Describe 'Regressions from the 0.4.1 review pass' {
             $src = Get-Content -LiteralPath (Join-Path $script:Root 'Functions/Task/Invoke-PSTSMElevatedRegistration.ps1') -Raw
             $src | Should -Match 'ConvertTo-PSTSMQuotedValue'
             ConvertTo-PSTSMQuotedValue -Value '\My Tasks\' | Should -Be '"\My Tasks\\"'
+        }
+    }
+}
+
+
+Describe 'Documentation cannot drift from the code' {
+    # The README has now gone stale three separate ways - test counts, an elevation claim that
+    # contradicted the feature, and a command list eighteen exports out of date - and each was
+    # found by a person reading it rather than by anything automated. These are the cheap
+    # mechanical guards.
+    BeforeAll {
+        $script:Root = Split-Path $PSScriptRoot -Parent
+        $script:Readme = Get-Content -LiteralPath (Join-Path $script:Root 'README.md') -Raw
+        $script:Manifest = Import-PowerShellDataFile (Join-Path $script:Root 'PSTSM.psd1')
+    }
+
+    It 'documents every exported command' {
+        $missing = @($script:Manifest.FunctionsToExport | Where-Object {
+                $script:Readme -notmatch [regex]::Escape($_)
+            })
+        $missing | Should -BeNullOrEmpty -Because "these are exported but appear nowhere in the README: $($missing -join ', ')"
+    }
+
+    It 'names no command the module does not export' {
+        # Catches the reverse drift: a command renamed in code but left in the docs.
+        $named = @([regex]::Matches($script:Readme, '`([A-Za-z]+-PSTSM[A-Za-z]*)`') |
+                ForEach-Object { $_.Groups[1].Value }) | Sort-Object -Unique
+        $named | Should -Not -BeNullOrEmpty
+        $ghost = @($named | Where-Object { $_ -notin $script:Manifest.FunctionsToExport })
+        $ghost | Should -BeNullOrEmpty -Because "the README names these but the module does not export them: $($ghost -join ', ')"
+    }
+
+    It 'keeps every shipped script reachable through Get-Help' {
+        # A plain comment directly above <# suppresses the whole comment-based help block, with no
+        # error and no warning - Get-Help just returns the filename as the synopsis. Start-PSTSM
+        # and PSTSM.Elevate both shipped that way, so their carefully written help was unreachable.
+        $offenders = @()
+        foreach ($file in Get-ChildItem $script:Root -Recurse -Filter *.ps1) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 1; $i -lt $lines.Count; $i++) {
+                if ($lines[$i].TrimStart().StartsWith('<#') -and $lines[$i - 1].TrimStart().StartsWith('#')) {
+                    $offenders += "$($file.Name):$($i + 1)"
+                    break
+                }
+            }
+        }
+        $offenders | Should -BeNullOrEmpty -Because "a comment adjacent to <# hides the help topic: $($offenders -join ', ')"
+    }
+
+    It 'advertises no launcher switch that Start-PSTSM.ps1 does not accept' {
+        # Already caught once: PSTSM.cmd offered -NoElevate two commits after it became -Elevated.
+        # This widens that check to the README, which is where most people will read the flags.
+        $accepted = (Get-Command (Join-Path $script:Root 'Start-PSTSM.ps1')).Parameters.Keys
+        $advertised = @([regex]::Matches($script:Readme, '(?:PSTSM\.cmd|Start-PSTSM\.ps1)\s+(-\w+)') |
+                ForEach-Object { $_.Groups[1].Value.TrimStart('-') }) | Sort-Object -Unique
+        foreach ($a in $advertised) {
+            $accepted | Should -Contain $a -Because "the README shows -$a"
         }
     }
 }

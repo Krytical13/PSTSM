@@ -38,9 +38,7 @@ function Grant-PSTSMBatchLogonRight {
         [switch]$PassThru
     )
 
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole(
-            [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not (Test-PSTSMElevated)) {
         throw 'Granting a user right requires an elevated session.'
     }
 

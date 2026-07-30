@@ -69,12 +69,20 @@ function Export-PSTSMPlan {
         $json = $export | ConvertTo-Json -Depth 10
 
         if ($PSCmdlet.ShouldProcess($Path, 'Write task plan')) {
-            $dir = Split-Path -Path $Path -Parent
+            # Resolve against the PowerShell location, not the process working directory. The
+            # cmdlets here (Split-Path, Test-Path, New-Item) are provider-aware and [System.IO.File]
+            # is not - it uses [Environment]::CurrentDirectory, which in a PowerShell session is
+            # wherever the process started and is frequently not where the user thinks they are.
+            # A relative path like the .\Plans\... in this function's own example therefore wrote
+            # somewhere else, or threw because the directory it had just created was not there.
+            # GetUnresolvedProviderPathFromPSPath works for a file that does not exist yet.
+            $full = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($Path)
+            $dir = Split-Path -Path $full -Parent
             if ($dir -and -not (Test-Path -LiteralPath $dir)) {
                 New-Item -ItemType Directory -Path $dir -Force | Out-Null
             }
             $utf8Bom = New-Object System.Text.UTF8Encoding($true)
-            [System.IO.File]::WriteAllText($Path, $json, $utf8Bom)
+            [System.IO.File]::WriteAllText($full, $json, $utf8Bom)
         }
 
         if ($PassThru) { Get-Item -LiteralPath $Path }

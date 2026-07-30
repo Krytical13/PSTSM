@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSM {
     <#
     .SYNOPSIS
@@ -22,9 +22,10 @@ function Show-PSTSM {
         layout and assert control bounds. LAYOUT INSPECTION ONLY - the handlers close over this
         function's locals, which are gone once it returns, so do not Show() the returned form.
     .PARAMETER SelfTest
-        Test seam. Shows the window minimised, pumps the message loop, then closes it - inside
-        this function, so handlers still resolve. Catches show-time failures that a headless
-        build cannot.
+        Test seam. Realises the window off-screen without activating it, pumps the message loop,
+        then closes it - inside this function, so handlers still resolve. Catches show-time
+        failures a headless build cannot. It does not take focus: a suite that steals the desktop
+        once per dialog is not one anybody will run twice.
     .OUTPUTS
         None, or [System.Windows.Forms.Form] when -BuildOnly is used.
     .EXAMPLE
@@ -477,9 +478,7 @@ function Show-PSTSM {
     if ($BuildOnly) { return $form }
 
     if ($SelfTest) {
-        $form.WindowState = 'Minimized'
-        $form.ShowInTaskbar = $false
-        $form.Show()
+        Show-PSTSMUIForTest -Form $form
         for ($i = 0; $i -lt 60; $i++) {
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 15

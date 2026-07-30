@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSMAccountPicker {
     <#
     .SYNOPSIS
@@ -194,9 +194,7 @@ function Show-PSTSMAccountPicker {
     if ($BuildOnly) { return $form }
 
     if ($SelfTest) {
-        $form.WindowState = 'Minimized'
-        $form.ShowInTaskbar = $false
-        $form.Show()
+        Show-PSTSMUIForTest -Form $form
         for ($i = 0; $i -lt 20; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10 }
         if (-not $form.IsDisposed) { $form.Close(); $form.Dispose() }
         return $dlg.Picked

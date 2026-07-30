@@ -26,7 +26,10 @@ function Get-PSTSMScriptProfile {
                                 S4U ("no password stored") logon type fail at 3am.
           UncPaths            - literal \\server\share references, same reason.
           HasExitStatement    - whether Task Scheduler's "Last Run Result" will mean anything.
-          UsesWriteHost       - output that goes nowhere unattended.
+          DpapiCommands       - ConvertTo/From-SecureString without a key. User-scope DPAPI is
+                                the other thing S4U cannot do, and it fails silently.
+          UsesGui             - WinForms/WPF references, which cannot draw with no desktop.
+          RequiresElevation   - a #Requires -RunAsAdministrator in the script itself.
     .PARAMETER Path
         Path to the .ps1 to inspect.
     .PARAMETER DefaultEngineId
