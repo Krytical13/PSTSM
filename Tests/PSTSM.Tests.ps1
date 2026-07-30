@@ -1231,3 +1231,37 @@ Describe 'Release metadata' {
         Test-Path -LiteralPath (Join-Path $script:ModuleRoot 'LICENSE') | Should -BeTrue
     }
 }
+
+Describe 'Launcher stays in step with the script it launches' {
+    BeforeAll {
+        $script:Root = Split-Path $PSScriptRoot -Parent
+        $script:Cmd = Get-Content -LiteralPath (Join-Path $script:Root 'PSTSM.cmd') -Raw
+        $script:StartParams = (Get-Command (Join-Path $script:Root 'Start-PSTSM.ps1')).Parameters.Keys
+    }
+
+    It 'documents only switches Start-PSTSM.ps1 actually accepts' {
+        # This drifted unnoticed into a published repo: PSTSM.cmd still advertised -NoElevate two
+        # commits after it became -Elevated. The earlier stale-reference audit globbed *.ps1 and
+        # *.md and never looked at the launcher, so the file type is the point of this test.
+        $advertised = [regex]::Matches($script:Cmd, '(?m)^rem\s+PSTSM\.cmd\s+(-\w+)') |
+            ForEach-Object { $_.Groups[1].Value.TrimStart('-') }
+        $advertised | Should -Not -BeNullOrEmpty -Because 'the examples are the thing being checked'
+        foreach ($a in $advertised) {
+            $script:StartParams | Should -Contain $a -Because "PSTSM.cmd advertises -$a"
+        }
+    }
+
+    It 'names no switch that has been removed' {
+        $script:Cmd | Should -Not -Match '(?i)-NoElevate'
+    }
+
+    It 'forwards arguments and pins the host it launches' {
+        $script:Cmd | Should -Match '%\*'          # arguments passed through
+        $script:Cmd | Should -Match '-STA'         # WinForms apartment
+        $script:Cmd | Should -Match '%~dp0'        # runs from its own folder, not the caller's
+    }
+
+    It 'describes the current elevation behaviour, not the old relaunch' {
+        $script:Cmd | Should -Not -Match '(?i)relaunches itself elevated'
+    }
+}

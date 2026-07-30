@@ -11,7 +11,8 @@ rem apartment that WinForms needs. Start-PSTSM.ps1 handles elevation and, if you
 rem other way, the apartment too.
 rem
 rem Any arguments are passed straight through, so this works:
-rem     PSTSM.cmd -NoElevate
+rem     PSTSM.cmd -Elevated
+rem     PSTSM.cmd -ScriptPath "C:\Scripts\Nightly.ps1"
 
 setlocal
 
@@ -38,8 +39,9 @@ if not exist "%~dp0Start-PSTSM.ps1" (
     exit /b 1
 )
 
-rem start "" so this console closes immediately instead of waiting on the GUI. Start-PSTSM.ps1
-rem then relaunches itself elevated, so this first process is short-lived and hidden.
+rem start "" so this console closes immediately rather than sitting there for as long as the
+rem window is open. Nothing is elevated here: PSTSM runs unelevated and asks for consent only
+rem when saving a task that genuinely needs it.
 start "" "%PSTSM_HOST%" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0Start-PSTSM.ps1" %*
 
 endlocal

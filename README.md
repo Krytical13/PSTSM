@@ -16,11 +16,24 @@ be derived, defaults the rest sensibly, and names the specific ways a task fails
 
 ## Run it
 
-**Double-click `PSTSM.cmd`.** No UAC prompt.
+Two front doors, because this is a module *and* a desktop app. No UAC prompt either way.
 
-That's the entry point because Windows opens a `.ps1` in an editor rather than running it. It
-hands off to `Start-PSTSM.ps1`, which sorts out the STA apartment WinForms requires — `pwsh`
-starts MTA, where a form either throws or deadlocks on its first dialog.
+```powershell
+Import-Module .\PSTSM.psd1
+Show-PSTSM
+```
+
+Or **double-click `PSTSM.cmd`** if you want it without a console.
+
+`.cmd` rather than the `.ps1` because Windows deliberately associates `.ps1` with an editor —
+double-clicking a script must not run it, which is a security decision and a good one. A small
+batch shim is the sanctioned way to get a double-click entry point, the same reason `gradlew.bat`
+and `mvnw.cmd` exist. It sets nothing up and hides nothing: it locates Windows PowerShell, checks
+the module is intact, and hands off to `Start-PSTSM.ps1` with your arguments passed through.
+
+`Start-PSTSM.ps1` in turn sorts out the STA apartment WinForms requires — `pwsh` starts MTA,
+where a form either throws or deadlocks on its first dialog. Import the module directly from an
+STA host and you can skip both.
 
 ### Elevation belongs to the task, not to opening the tool
 
