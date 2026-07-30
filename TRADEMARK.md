@@ -1,8 +1,18 @@
-# Trademark and naming
+﻿# About the name
 
-The **PSTSM** name and any associated logo are not covered by the GPL-3.0 licence that
-applies to the source code. Copyright licences and trademark rights are separate things: the
-GPL gives you broad rights to the *code*, and says nothing about the *name*.
+The GPL-3.0 licence covers the *code*. It says nothing about the *name*, because copyright
+licences and naming are separate things. This file is the only thing asked about the name, and
+it is a request rather than a legal claim.
+
+## The name is not unique, and this project does not claim it
+
+**PSTSM** is a short abbreviation, and an unrelated project used it first: a
+[PowerShell module for IBM Tivoli Storage Manager](https://www.powershellgallery.com/packages/PSTSM),
+published to the PowerShell Gallery in 2017. It has nothing to do with this project and predates
+it, so no exclusive right to the letters PSTSM is claimed here and none should be inferred.
+
+If you came looking for Tivoli / Spectrum Protect tooling, that is the one you want. This PSTSM
+is *PowerShell Task Scheduler Manager*, distributed through GitHub only.
 
 ## What you may do
 
@@ -11,21 +21,13 @@ GPL gives you broad rights to the *code*, and says nothing about the *name*.
   "compatible with PSTSM".
 - Keep the name in unmodified copies you redistribute.
 
-## What to please avoid
+## What is asked
 
-- Naming a modified or repackaged version **PSTSM**, or a name close enough to be
-  confused with it, in a way that suggests it is this project or endorsed by it.
-- Using the name to market a separate product or service as though it were this one.
+If you make substantial changes, give your version its own name and credit the original, rather
+than publishing a modified build under this one in a way that suggests it is this project or is
+endorsed by it.
 
-If you have made substantial changes, give it your own name and credit the original. That is
-the only thing being asked, and it costs nothing.
-
-## Why this file exists
-
-The GPL is deliberately permissive about redistribution, including for money. That is fine and
-intended. What it cannot do is stop someone shipping a confusingly-identical clone under the
-same name. Reserving the name is the normal, lightweight way to keep that boundary clear
-without restricting anyone's use of the code.
-
-Nothing here is a claim of registration. These are common-law rights arising from use of the
-name.
+That is the whole request, and it costs nothing. It is not about restricting use — the GPL is
+deliberately permissive about redistribution, including for money, and that is intended. It is
+about not having two different things circulating under one name, which mostly spares whoever
+ends up supporting the result.

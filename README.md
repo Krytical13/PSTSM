@@ -455,6 +455,10 @@ and nobody can take it closed-source and resell it as their own.
 The **name** is handled separately — see [TRADEMARK.md](TRADEMARK.md). Short version: fork
 freely, but give a substantially changed version its own name.
 
+Not to be confused with the unrelated [PSTSM module for IBM Tivoli Storage Manager](https://www.powershellgallery.com/packages/PSTSM),
+which used the abbreviation first and is a completely different tool. This project claims no
+exclusive right to it, and is distributed through GitHub only.
+
 ## Contributing
 
 Issues and pull requests are welcome. By contributing you agree your contribution is licensed
