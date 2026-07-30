@@ -40,6 +40,9 @@
         'Get-PSTSMTaskRunLog'
         'Register-PSTSMPlan'
         'Invoke-PSTSMElevatedRegistration'
+        # Start-PSTSMBrokerProcess is deliberately NOT exported. It is the impure seam the broker
+        # tests mock, and Mock -ModuleName reaches module-internal functions without needing it
+        # public. Exporting internal plumbing only widens the surface people can depend on.
         'Test-PSTSMPlanNeedsElevation'
         'Test-PSTSMElevated'
         'New-PSTSMLogWrapper'

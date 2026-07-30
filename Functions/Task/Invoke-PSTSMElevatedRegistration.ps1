@@ -68,6 +68,81 @@ function Test-PSTSMElevated {
         [System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Start-PSTSMBrokerProcess {
+    <#
+    .SYNOPSIS
+        Launches the elevated helper and waits for it. The one impure step of the broker.
+    .DESCRIPTION
+        Split out for a reason: everything after this call - cancellation, timeout, reply
+        parsing, the stage fallback, temp cleanup - was untestable while the process launch was
+        inline, because exercising any of it meant a real consent prompt and a real elevated
+        child. With this as a seam the whole downstream path is covered offline.
+
+        ProcessStartInfo rather than Start-Process, so the ShellExecute failure arrives intact.
+        Start-Process wraps it in an InvalidOperationException and discards the Win32Exception,
+        which made the cancellation branch unreachable: declining the prompt - the single most
+        likely outcome of showing one - fell through to the generic handler and put an error
+        dialog on screen for what is simply the operator saying no.
+    .PARAMETER FilePath
+        Executable to launch.
+    .PARAMETER Arguments
+        Fully quoted argument string.
+    .PARAMETER Visible
+        Show the window. Required when the helper has to prompt for a password, since a hidden
+        prompt would just hang until the timeout.
+    .PARAMETER ReplyPath
+        Where the helper is expected to write its reply. Polled briefly after exit.
+    .PARAMETER TimeoutSeconds
+        How long to wait before giving up and killing the child.
+    .OUTPUTS
+        [pscustomobject] ExitCode, Exited, ReplyWritten.
+    #>
+    [OutputType([pscustomobject])]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string]$Arguments,
+        [switch]$Visible,
+        [Parameter(Mandatory)][string]$ReplyPath,
+        [int]$TimeoutSeconds = 600
+    )
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $true          # required for the runas verb, and precludes redirection
+    $psi.Verb = 'runas'
+    $psi.WindowStyle = if ($Visible) {
+        [System.Diagnostics.ProcessWindowStyle]::Normal
+    }
+    else {
+        [System.Diagnostics.ProcessWindowStyle]::Hidden
+    }
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $exited) {
+        # Best effort: it may have exited between the wait timing out and this call.
+        try { $proc.Kill() } catch { Write-Verbose "Could not stop the helper: $($_.Exception.Message)" }
+    }
+
+    # The helper writes its reply from a finally block, so give the filesystem a moment rather
+    # than declaring "exited without reporting back" on a race.
+    $replyWritten = $false
+    if ($exited) {
+        for ($i = 0; $i -lt 20; $i++) {
+            if (Test-Path -LiteralPath $ReplyPath) { $replyWritten = $true; break }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+
+    [pscustomobject]@{
+        ExitCode     = if ($exited) { $proc.ExitCode } else { $null }
+        Exited       = $exited
+        ReplyWritten = $replyWritten
+    }
+}
+
 function Invoke-PSTSMElevatedRegistration {
     <#
     .SYNOPSIS
@@ -189,25 +264,9 @@ function Invoke-PSTSMElevatedRegistration {
         # warning, the old privileged task kept firing alongside its replacement.
         $argLine = ($helperArgs | ForEach-Object { ConvertTo-PSTSMQuotedValue -Value $_ }) -join ' '
 
-        # ProcessStartInfo rather than Start-Process, so the ShellExecute failure arrives intact.
-        # Start-Process wraps it in an InvalidOperationException with the Win32Exception discarded,
-        # which made the catch below unreachable: declining the consent prompt - the single most
-        # likely outcome of showing one - fell through to the generic handler and put an error
-        # dialog on screen for what is simply the operator saying no.
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $psExe
-        $psi.Arguments = $argLine
-        $psi.UseShellExecute = $true          # required for the runas verb, and precludes redirection
-        $psi.Verb = 'runas'
-        $psi.WindowStyle = if ($needsPassword) {
-            [System.Diagnostics.ProcessWindowStyle]::Normal
-        }
-        else {
-            [System.Diagnostics.ProcessWindowStyle]::Hidden
-        }
-
         try {
-            $proc = [System.Diagnostics.Process]::Start($psi)
+            $outcome = Start-PSTSMBrokerProcess -FilePath $psExe -Arguments $argLine `
+                -Visible:$needsPassword -ReplyPath $replyPath -TimeoutSeconds $TimeoutSeconds
         }
         catch [System.ComponentModel.Win32Exception] {
             # 1223 ERROR_CANCELLED is the operator dismissing the UAC prompt. That is a decision,
@@ -219,15 +278,13 @@ function Invoke-PSTSMElevatedRegistration {
             throw
         }
 
-        if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        if (-not $outcome.Exited) {
             $result.Error = "The elevated helper did not finish within $TimeoutSeconds seconds."
-            # Best effort: it may have exited between the wait timing out and this call.
-            try { $proc.Kill() } catch { Write-Verbose "Could not stop the helper: $($_.Exception.Message)" }
             return $result
         }
 
         if (-not (Test-Path -LiteralPath $replyPath)) {
-            $result.Error = "The elevated helper exited with code $($proc.ExitCode) without reporting back."
+            $result.Error = "The elevated helper exited with code $($outcome.ExitCode) without reporting back."
             return $result
         }
 

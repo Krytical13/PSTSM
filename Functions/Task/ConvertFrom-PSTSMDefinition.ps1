@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function ConvertFrom-PSTSMDefinition {
     <#
     .SYNOPSIS
@@ -132,6 +132,24 @@ function ConvertFrom-PSTSMDefinition {
 
         $engineId = if ($parsed.EngineId) { $parsed.EngineId } else { 'powershell' }
 
+        # Re-derive which switches the script defaults to $true, so re-registering an existing
+        # task keeps writing -X:$false for any that were turned off. Best effort: a task whose
+        # script has since moved or been deleted still opens, it just cannot know this - and
+        # the preflight already reports the missing script far more loudly.
+        $switchDefaultTrue = @()
+        if ($scriptPath -and (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+            try {
+                $prof = Get-PSTSMScriptProfile -Path $scriptPath -ErrorAction Stop
+                $switchDefaultTrue = @($prof.Parameters | Where-Object {
+                        $_.IsSwitch -and $_.HasDefault -and $_.DefaultKind -eq 'Literal' -and
+                        $null -ne $_.ResolvedDefault -and [bool]$_.ResolvedDefault.Value
+                    } | ForEach-Object { $_.Name })
+            }
+            catch {
+                Write-Verbose "Could not re-read switch defaults from $scriptPath : $($_.Exception.Message)"
+            }
+        }
+
         $plan = [PSCustomObject]@{
             PSTypeName        = 'PSTSM.TaskPlan'
             SchemaVersion     = 1
@@ -170,6 +188,7 @@ function ConvertFrom-PSTSMDefinition {
             }
 
             Settings          = $settings
+            SwitchDefaultTrue = @($switchDefaultTrue)
 
             Logging           = [ordered]@{
                 Mode          = $loggingMode
@@ -210,7 +229,8 @@ function ConvertFrom-PSTSMDefinition {
                 -ExecutionPolicy $this.ExecutionPolicy `
                 -NoProfile $this.NoProfile `
                 -NonInteractive $this.NonInteractive `
-                -WindowStyle $this.WindowStyle
+                -WindowStyle $this.WindowStyle `
+            -SwitchDefaultTrue $this.SwitchDefaultTrue
         }
 
         $plan

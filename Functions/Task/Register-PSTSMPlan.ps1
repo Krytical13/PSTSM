@@ -72,7 +72,8 @@ function Register-PSTSMPlan {
             -ExecutionPolicy $Plan.ExecutionPolicy `
             -NoProfile $Plan.NoProfile `
             -NonInteractive $Plan.NonInteractive `
-            -WindowStyle $Plan.WindowStyle
+            -WindowStyle $Plan.WindowStyle `
+            -SwitchDefaultTrue $Plan.SwitchDefaultTrue
 
         $actionParams = @{
             Execute  = $Plan.EnginePath

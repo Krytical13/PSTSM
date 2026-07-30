@@ -154,6 +154,19 @@ function New-PSTSMPlan {
     }
     $resolvedParameters = $orderedParameters
 
+    # Switches the script declares as [switch]$X = $true need special handling on the command
+    # line: leaving one off does NOT turn it off, it lets the script's own default turn it ON.
+    # Only -X:$false will do it. ConvertTo-PSTSMArgument has always known that, but it could only
+    # learn which switches those were from a -ScriptProfile that no production caller passed - so
+    # unticking such a box in the editor silently registered a task that still ran with it on.
+    #
+    # Carried on the plan rather than re-derived at registration, so it survives export/import
+    # and does not need the script to still be readable on the machine doing the registering.
+    $switchDefaultTrue = @($ScriptProfile.Parameters | Where-Object {
+            $_.IsSwitch -and $_.HasDefault -and $_.DefaultKind -eq 'Literal' -and
+            $null -ne $_.ResolvedDefault -and [bool]$_.ResolvedDefault.Value
+        } | ForEach-Object { $_.Name })
+
     $defaultSettings = [ordered]@{
         MultipleInstances          = 'IgnoreNew'
         StartWhenAvailable         = $true
@@ -234,6 +247,9 @@ function New-PSTSMPlan {
         Settings         = $defaultSettings
         Logging          = $defaultLogging
 
+        # Names of [switch]$X = $true parameters. Rendering needs these to emit -X:$false.
+        SwitchDefaultTrue = @($switchDefaultTrue)
+
         Source           = [ordered]@{
             EngineConfidence = $ScriptProfile.EngineConfidence
             EngineReason     = $ScriptProfile.EngineReason
@@ -250,7 +266,8 @@ function New-PSTSMPlan {
             -ExecutionPolicy $this.ExecutionPolicy `
             -NoProfile $this.NoProfile `
             -NonInteractive $this.NonInteractive `
-            -WindowStyle $this.WindowStyle
+            -WindowStyle $this.WindowStyle `
+            -SwitchDefaultTrue $this.SwitchDefaultTrue
     }
 
     $plan

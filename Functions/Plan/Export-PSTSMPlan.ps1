@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Export-PSTSMPlan {
     <#
     .SYNOPSIS
@@ -62,6 +62,11 @@ function Export-PSTSMPlan {
             Principal        = $Plan.Principal
             Settings         = $Plan.Settings
             Logging          = $Plan.Logging
+
+            # Which switches the script declares as $true. Recorded because rendering needs it to
+            # write -X:$false, and the machine applying this plan may not have the script to
+            # re-derive it from.
+            SwitchDefaultTrue = @($Plan.SwitchDefaultTrue)
 
             RenderedCommand  = "$($Plan.EnginePath) $($Plan.ArgumentString)"
         }
@@ -182,6 +187,7 @@ function Import-PSTSMPlan {
             WindowStyle      = $raw.WindowStyle
 
             Triggers         = $triggers
+            SwitchDefaultTrue = @($raw.SwitchDefaultTrue)
             Principal        = (ConvertTo-PSTSMOrderedDictionary $raw.Principal)
             Settings         = (ConvertTo-PSTSMOrderedDictionary $raw.Settings)
             Logging          = (ConvertTo-PSTSMOrderedDictionary $raw.Logging)
@@ -200,7 +206,8 @@ function Import-PSTSMPlan {
                 -ExecutionPolicy $this.ExecutionPolicy `
                 -NoProfile $this.NoProfile `
                 -NonInteractive $this.NonInteractive `
-                -WindowStyle $this.WindowStyle
+                -WindowStyle $this.WindowStyle `
+            -SwitchDefaultTrue $this.SwitchDefaultTrue
         }
 
         $plan

@@ -458,6 +458,17 @@ Describe 'Test-PSTSMPlan' {
         $script:basePlan = New-PSTSMPlan -ScriptPath $script:StandardScript `
             -Parameters ([ordered]@{ SmtpServer = 'mail.contoso.com' }) `
             -Trigger (New-PSTSMTriggerSpec -Type Daily -At '07:00')
+
+        # Built here rather than inside the first It that happens to need it. Two separate tests
+        # use this fixture, and creating it in one of them meant the other failed whenever the
+        # suite was filtered to a single test - green as a whole, broken in isolation, which is
+        # the worst way round.
+        $script:DpapiScript = Join-Path $TestDrive 'Uses-Dpapi.ps1'
+        @'
+param([string]$CredentialPath = 'C:\secrets\api.dat')
+$secure = Get-Content -LiteralPath $CredentialPath | ConvertTo-SecureString
+exit 0
+'@ | Set-Content -LiteralPath $script:DpapiScript -Encoding UTF8
     }
 
     It 'passes a well-formed plan with no errors' {
@@ -495,14 +506,7 @@ Describe 'Test-PSTSMPlan' {
     It 'warns that S4U cannot decrypt DPAPI-protected secrets' {
         # The non-obvious half of Microsoft's "no access to either the network or encrypted
         # files": the DPAPI master key is unlocked from the password S4U does not have.
-        $dpapi = Join-Path $TestDrive 'Uses-Dpapi.ps1'
-        @'
-param([string]$CredentialPath = 'C:\secrets\api.dat')
-$secure = Get-Content -LiteralPath $CredentialPath | ConvertTo-SecureString
-exit 0
-'@ | Set-Content -LiteralPath $dpapi -Encoding UTF8
-
-        $plan = New-PSTSMPlan -ScriptPath $dpapi
+        $plan = New-PSTSMPlan -ScriptPath $script:DpapiScript
         $r = Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck
         ($r | Where-Object Id -eq 'S4U_DPAPI').Severity | Should -Be 'Warning'
     }
@@ -523,8 +527,7 @@ exit 0
     }
 
     It 'does not raise the DPAPI warning for a logon type that has credentials' {
-        $dpapi = Join-Path $TestDrive 'Uses-Dpapi.ps1'
-        $plan = New-PSTSMPlan -ScriptPath $dpapi -LogonType 'Password' -UserId 'CONTOSO\svc_x'
+        $plan = New-PSTSMPlan -ScriptPath $script:DpapiScript -LogonType 'Password' -UserId 'CONTOSO\svc_x'
         $r = Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck
         @($r | Where-Object Id -eq 'S4U_DPAPI') | Should -HaveCount 0
     }
@@ -1203,20 +1206,31 @@ Describe 'Release metadata' {
         $notes | Should -Match ([regex]::Escape($script:Manifest.ModuleVersion) + '\s*-')
     }
 
-    It 'exports every function the module defines, and defines every one it exports' {
+    It 'leaves no function that is neither exported nor used' {
+        # The point is dead weight, not export-for-its-own-sake. A function that is unexported
+        # BUT called by other module code is deliberate encapsulation - Start-PSTSMBrokerProcess
+        # is exactly that, the impure seam the broker tests mock. What should never survive is a
+        # function nothing calls and nobody can call.
         $defined = @(Get-ChildItem (Join-Path $script:ModuleRoot 'Functions') -Recurse -Filter *.ps1 |
                 ForEach-Object {
-                    $errs = $null
-                    $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+                    $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null)
                     $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) |
                         ForEach-Object { $_.Name }
                 }) | Sort-Object -Unique
 
-        $exported = @($script:Manifest.FunctionsToExport) | Sort-Object -Unique
-        # UI functions live outside Functions\, so only check that nothing under Functions\ was
-        # forgotten - a function nobody can call is dead weight in a published module.
-        $missing = @($defined | Where-Object { $_ -notin $exported })
-        $missing | Should -BeNullOrEmpty -Because "these are defined but not exported: $($missing -join ', ')"
+        $exported = @($script:Manifest.FunctionsToExport)
+        # Everything the module ships, so "is it called anywhere" can be answered honestly.
+        $allSource = (Get-ChildItem $script:ModuleRoot -Recurse -Filter *.ps1 |
+                ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+
+        $orphans = @()
+        foreach ($fn in $defined) {
+            if ($fn -in $exported) { continue }
+            # More than one occurrence means something beyond its own definition mentions it.
+            $uses = ([regex]::Matches($allSource, [regex]::Escape($fn))).Count
+            if ($uses -le 1) { $orphans += $fn }
+        }
+        $orphans | Should -BeNullOrEmpty -Because "these are neither exported nor called: $($orphans -join ', ')"
     }
 
     It 'carries an SPDX identifier in every script, matching the declared licence' {
@@ -1484,6 +1498,215 @@ Describe 'Documentation cannot drift from the code' {
         foreach ($a in $advertised) {
             $accepted | Should -Contain $a -Because "the README shows -$a"
         }
+    }
+}
+
+
+Describe 'Switch parameters that default to $true' {
+    # A [switch]$X = $true cannot be turned off by omitting it - the script's own default turns
+    # it back on. Only -X:$false does. ConvertTo-PSTSMArgument always knew that, but it could
+    # only learn WHICH switches from a -ScriptProfile no production caller passed, so unticking
+    # the box in the editor registered a task that still ran with the switch on.
+    BeforeAll {
+        $script:SwitchScript = Join-Path $TestDrive 'Switchy.ps1'
+        @'
+param(
+    [string]$Server = 'mail.contoso.com',
+    [switch]$SendMail = $true,
+    [switch]$Extra
+)
+exit 0
+'@ | Set-Content -LiteralPath $script:SwitchScript -Encoding UTF8
+    }
+
+    It 'records which switches the script defaults on' {
+        $plan = New-PSTSMPlan -ScriptPath $script:SwitchScript
+        $plan.SwitchDefaultTrue | Should -Contain 'SendMail'
+        $plan.SwitchDefaultTrue | Should -Not -Contain 'Extra' -Because 'it defaults to $false'
+    }
+
+    It 'writes -X:$false when the operator turns one off' {
+        $plan = New-PSTSMPlan -ScriptPath $script:SwitchScript
+        $plan.Parameters['SendMail'] = $false
+        $plan.ArgumentString | Should -Match ([regex]::Escape('-SendMail:$false'))
+    }
+
+    It 'writes a bare -X when it is left on' {
+        $plan = New-PSTSMPlan -ScriptPath $script:SwitchScript
+        $plan.Parameters['SendMail'] = $true
+        $plan.ArgumentString | Should -Match '-SendMail(?!:)'
+    }
+
+    It 'still omits a switch that defaults off and is left off' {
+        $plan = New-PSTSMPlan -ScriptPath $script:SwitchScript
+        $plan.Parameters['Extra'] = $false
+        $plan.ArgumentString | Should -Not -Match 'Extra'
+    }
+
+    It 'survives export and import onto a machine without the script' {
+        # This is why the list lives on the plan instead of being re-derived at registration.
+        $plan = New-PSTSMPlan -ScriptPath $script:SwitchScript
+        $plan.Parameters['SendMail'] = $false
+        $file = Join-Path $TestDrive 'switchy.task.json'
+        Export-PSTSMPlan -Plan $plan -Path $file
+        $back = Import-PSTSMPlan -Path $file -KeepEnginePath
+        $back.SwitchDefaultTrue | Should -Contain 'SendMail'
+        $back.ArgumentString | Should -Match ([regex]::Escape('-SendMail:$false'))
+    }
+}
+
+Describe 'Generated wrapper exit codes' {
+    # The only ExitCode assertion in the suite belonged to a parameter-forwarding test whose
+    # payload exits 0 - which is also what the wrapper returns by default, so the entire
+    # exit-code path could be deleted and the suite stayed green.
+    BeforeAll {
+        $script:ExitDir = Join-Path $TestDrive 'exit'
+        New-Item -ItemType Directory -Path $script:ExitDir -Force | Out-Null
+
+        function script:Invoke-Wrapper {
+            param([string]$Body, [string]$Name)
+            $target = Join-Path $script:ExitDir "$Name.ps1"
+            Set-Content -LiteralPath $target -Value $Body -Encoding UTF8
+            $plan = New-PSTSMPlan -ScriptPath $target -TaskName $Name
+            $plan.Logging.Mode = 'Transcript'
+            $wrapper = New-PSTSMLogWrapper -Plan $plan
+            $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            & $psExe -NoProfile -ExecutionPolicy Bypass -File $wrapper | Out-Null
+            $LASTEXITCODE
+        }
+    }
+
+    It 'propagates a non-zero exit from the wrapped script' {
+        script:Invoke-Wrapper -Name 'ExitsThree' -Body 'exit 3' | Should -Be 3
+    }
+
+    It 'reports failure when the wrapped script throws' {
+        # A throw must not surface as 0. "Last Run Result: 0x0" on a script that blew up is the
+        # single most misleading thing Task Scheduler can show.
+        script:Invoke-Wrapper -Name 'Throws' -Body 'throw "boom"' | Should -Not -Be 0
+    }
+
+    It 'returns zero for a script that succeeds' {
+        script:Invoke-Wrapper -Name 'Succeeds' -Body '"fine"; exit 0' | Should -Be 0
+    }
+
+    It 'leaves a transcript behind' {
+        $target = Join-Path $script:ExitDir 'Logged.ps1'
+        Set-Content -LiteralPath $target -Value '"hello from the task"; exit 0' -Encoding UTF8
+        $plan = New-PSTSMPlan -ScriptPath $target -TaskName 'Logged'
+        $plan.Logging.Mode = 'Transcript'
+        $wrapper = New-PSTSMLogWrapper -Plan $plan
+        $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $wrapper | Out-Null
+        $logs = @(Get-ChildItem -LiteralPath $plan.Logging.Directory -Filter 'Logged_*.log' -ErrorAction SilentlyContinue)
+        $logs.Count | Should -BeGreaterThan 0
+        (Get-Content -LiteralPath $logs[0].FullName -Raw) | Should -Match 'hello from the task'
+    }
+}
+
+Describe 'Elevated registration broker paths' {
+    # Everything after Process::Start was dark: cancellation, timeout, reply mapping and the
+    # stage fallback. Mocking keeps all of it offline - no consent prompt, no elevated child,
+    # nothing registered.
+    BeforeAll {
+        $script:BrokerPlan = New-PSTSMPlan -ScriptPath $script:QuietScript -TaskName 'BrokerCase' -RunLevel 'Highest'
+    }
+
+    It 'reports Cancelled, not an error, when the consent prompt is dismissed' {
+        # ERROR_CANCELLED (1223) is the operator saying no. It must not raise a dialog.
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            throw (New-Object System.ComponentModel.Win32Exception 1223)
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        $r.Cancelled | Should -BeTrue
+        $r.Success | Should -BeFalse
+        $r.Error | Should -BeNullOrEmpty -Because 'declining is a decision, not a fault'
+    }
+
+    It 'rethrows a ShellExecute failure that is not a cancellation' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            throw (New-Object System.ComponentModel.Win32Exception 5)   # access denied
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        $r.Cancelled | Should -BeFalse
+        $r.Success | Should -BeFalse
+        $r.Error | Should -Not -BeNullOrEmpty
+    }
+
+    It 'surfaces the helper error when the reply reports failure' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            param($ReplyPath)   # only the reply path matters to the simulation
+            '{"Success":false,"Error":"the helper said no","Stage":"register","Warnings":[]}' |
+                Set-Content -LiteralPath $ReplyPath -Encoding UTF8
+            [pscustomobject]@{ ExitCode = 1; Exited = $true }
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        $r.Success | Should -BeFalse
+        $r.Error | Should -Be 'the helper said no'
+    }
+
+    It 'passes warnings back from a successful elevated save' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            param($ReplyPath)   # only the reply path matters to the simulation
+            '{"Success":true,"Error":null,"Stage":"done","Warnings":["old task left behind"],"RanAs":"CONTOSO\\adm"}' |
+                Set-Content -LiteralPath $ReplyPath -Encoding UTF8
+            [pscustomobject]@{ ExitCode = 0; Exited = $true }
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        $r.Success | Should -BeTrue
+        $r.Warnings | Should -Contain 'old task left behind'
+        $r.RanAs | Should -Be 'CONTOSO\adm'
+    }
+
+    It 'explains a helper that exits without reporting back' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            [pscustomobject]@{ ExitCode = 9009; Exited = $true }   # writes no reply file
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        $r.Success | Should -BeFalse
+        $r.Error | Should -BeLike '*without reporting back*'
+    }
+
+    It 'reports a timeout rather than hanging' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            [pscustomobject]@{ ExitCode = $null; Exited = $false }
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -TimeoutSeconds 5 -Confirm:$false
+        $r.Success | Should -BeFalse
+        $r.Error | Should -BeLike '*did not finish*'
+    }
+
+    It 'removes the temporary plan file whatever happens' {
+        # The plan describes a scheduled task in full. It should not outlive the call.
+        $before = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'PSTSM_elev_*' -ErrorAction SilentlyContinue).Count
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            throw (New-Object System.ComponentModel.Win32Exception 1223)
+        }
+        $null = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan -Confirm:$false
+        @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'PSTSM_elev_*' -ErrorAction SilentlyContinue).Count |
+            Should -Be $before
+    }
+}
+
+Describe 'PSTSM.Elevate.ps1 behaviour' {
+    # Previously asserted only to parse and to declare the right parameter names, which would
+    # hold for a file whose body had been deleted.
+    It 'always writes a reply, even when the plan cannot be read' {
+        $helper = Join-Path (Split-Path $PSScriptRoot -Parent) 'PSTSM.Elevate.ps1'
+        $reply = Join-Path $TestDrive 'reply.json'
+        $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+        # A plan path that does not exist: it fails early, before anything is registered, and the
+        # parent has no other way to learn what happened.
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $helper `
+            -PlanPath (Join-Path $TestDrive 'no-such-plan.json') -ResultPath $reply | Out-Null
+        $exit = $LASTEXITCODE
+
+        Test-Path -LiteralPath $reply | Should -BeTrue -Because 'the reply is the only channel back'
+        $parsed = Get-Content -LiteralPath $reply -Raw | ConvertFrom-Json
+        $parsed.Success | Should -BeFalse
+        $parsed.Error | Should -Not -BeNullOrEmpty
+        $exit | Should -Be 1
     }
 }
 

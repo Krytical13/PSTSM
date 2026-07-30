@@ -555,6 +555,26 @@ Describe 'Launcher' {
         $script:LauncherRoot = Split-Path $PSScriptRoot -Parent
         $script:Cmd = Join-Path $script:LauncherRoot 'PSTSM.cmd'
         $script:Ps1 = Join-Path $script:LauncherRoot 'Start-PSTSM.ps1'
+
+        # Lifted out of the launcher's own AST rather than restated here. The two elevation
+        # tests below used to declare a local scriptblock that duplicated this logic and assert
+        # on the copy - so they passed with Start-PSTSM.ps1 deleted, and would have kept passing
+        # if the real guard were inverted.
+        #
+        # Note this must live in the SAME BeforeAll: a second BeforeAll in one Pester 5 block
+        # does not run alongside the first, it replaces it, which silently nulled $script:Cmd.
+        $script:LauncherAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $script:Ps1, [ref]$null, [ref]$null)
+
+        $assignments = $script:LauncherAst.FindAll(
+            { param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)
+        $script:NeedsElevationExpr = @($assignments |
+                Where-Object { $_.Left.Extent.Text -eq '$needsElevation' })[0].Right.Extent.Text
+
+        $ifs = $script:LauncherAst.FindAll(
+            { param($n) $n -is [System.Management.Automation.Language.IfStatementAst] }, $true)
+        $script:RelaunchGuardExpr = @($ifs |
+                Where-Object { $_.Clauses[0].Item1.Extent.Text -match 'Relaunched' })[0].Clauses[0].Item1.Extent.Text
     }
 
     It 'ships a double-clickable entry point' {
@@ -584,33 +604,42 @@ Describe 'Launcher' {
         $names | Should -Not -Contain 'NoElevate'   # the old, backwards default
     }
 
+    It 'reads its elevation and relaunch logic from the real launcher' {
+        # If either extraction returns nothing the two tests below would vacuously pass, so the
+        # extraction itself is asserted first.
+        $script:NeedsElevationExpr | Should -Not -BeNullOrEmpty
+        $script:RelaunchGuardExpr | Should -Not -BeNullOrEmpty
+        $script:RelaunchGuardExpr | Should -Match 'Relaunched'
+    }
+
     It 'can never relaunch itself twice' {
-        # -Relaunched is the loop guard. If any combination still relaunched while it was set,
-        # a cancelled UAC prompt would spawn processes forever.
-        $decide = {
-            param($elevated, $sta, $wantElevated, $relaunched)
-            $needsSta = -not $sta
-            $needsElev = $wantElevated -and (-not $elevated)
-            (($needsSta -or $needsElev) -and -not $relaunched)
-        }
-        foreach ($e in $true, $false) {
-            foreach ($s in $true, $false) {
-                foreach ($w in $true, $false) {
-                    (& $decide $e $s $w $true) | Should -BeFalse -Because 'once relaunched it must run, not relaunch again'
+        # -Relaunched is the loop guard. If any combination still relaunched while it was set, a
+        # dismissed UAC prompt would spawn processes forever.
+        $guard = [scriptblock]::Create(
+            'param($needsSta, $needsElevation, $Relaunched) ' + $script:RelaunchGuardExpr)
+        # The real expression also consults $env:PSTSM_NOLAUNCH; unset is the normal state and
+        # the one being characterised here.
+        $saved = $env:PSTSM_NOLAUNCH
+        $env:PSTSM_NOLAUNCH = $null
+        try {
+            foreach ($sta in $true, $false) {
+                foreach ($elev in $true, $false) {
+                    (& $guard $sta $elev $true) | Should -BeFalse -Because 'once relaunched it must run, not relaunch again'
                 }
             }
+            # ...and it still relaunches when it has not yet done so and something needs it.
+            (& $guard $true $false $false) | Should -BeTrue -Because 'an MTA host must be relaunched STA'
         }
+        finally { $env:PSTSM_NOLAUNCH = $saved }
     }
 
     It 'never prompts for elevation unless it was asked for' {
-        $needsElevation = {
-            param($elevated, $wantElevated)
-            $wantElevated -and (-not $elevated)
-        }
+        $needsElevation = [scriptblock]::Create(
+            'param($Elevated, $isElevated) ' + $script:NeedsElevationExpr)
         # Default launch: no prompt, whatever the current token is.
-        foreach ($e in $true, $false) { (& $needsElevation $e $false) | Should -BeFalse }
+        foreach ($e in $true, $false) { (& $needsElevation $false $e) | Should -BeFalse }
         # -Elevated on an unelevated token: prompt. Already elevated: no need.
-        (& $needsElevation $false $true) | Should -BeTrue
+        (& $needsElevation $true $false) | Should -BeTrue
         (& $needsElevation $true $true) | Should -BeFalse
     }
 }

@@ -71,6 +71,11 @@ function ConvertTo-PSTSMArgument {
 
         [object]$ScriptProfile,
 
+        # Names of [switch]$X = $true parameters, so an unticked one is rendered -X:$false
+        # instead of being omitted. A plan carries this, which is what makes it work after an
+        # export/import onto a machine where the script is not present.
+        [string[]]$SwitchDefaultTrue,
+
         [string]$ExtraArguments,
 
         [ValidateSet('Bypass', 'RemoteSigned', 'AllSigned', 'Restricted', 'Unrestricted', 'Default', 'Undefined', 'None')]
@@ -95,12 +100,24 @@ function ConvertTo-PSTSMArgument {
     $parts.Add("-File $(ConvertTo-PSTSMQuotedValue -Value $ScriptPath -AlwaysQuote)")
 
     if ($Parameters) {
-        # Look up declared switch defaults once so we know when $false must be explicit.
-        $switchDefaultTrue = @{}
+        # Which switches the script declares as [switch]$X = $true, so an unticked one is written
+        # -X:$false rather than omitted. Omitting it would let the script's own default turn it
+        # back ON, which is the opposite of what the operator asked for.
+        #
+        # -SwitchDefaultTrue is the path that actually gets used: the plan carries the list, so it
+        # survives export/import and needs no access to the script at registration time. The
+        # -ScriptProfile form is kept for direct callers who already have a profile in hand - and
+        # because it was the only form for a while, during which no production caller passed it
+        # and the whole branch was dead.
+        $switchDefaults = @{}
+        foreach ($n in @($SwitchDefaultTrue)) {
+            if ($n) { $switchDefaults[$n] = $true }
+        }
         if ($ScriptProfile -and $ScriptProfile.Parameters) {
             foreach ($sp in $ScriptProfile.Parameters) {
-                if ($sp.IsSwitch -and $sp.DefaultValue -and $sp.DefaultValue -match '(?i)\$true') {
-                    $switchDefaultTrue[$sp.Name] = $true
+                if ($sp.IsSwitch -and $sp.HasDefault -and $sp.DefaultKind -eq 'Literal' -and
+                    $null -ne $sp.ResolvedDefault -and [bool]$sp.ResolvedDefault.Value) {
+                    $switchDefaults[$sp.Name] = $true
                 }
             }
         }
@@ -115,7 +132,7 @@ function ConvertTo-PSTSMArgument {
                 if ($isTrue) {
                     $parts.Add("-$key")
                 }
-                elseif ($switchDefaultTrue.ContainsKey($key)) {
+                elseif ($switchDefaults.ContainsKey($key)) {
                     # Script defaults this on; omitting would silently leave it on.
                     $parts.Add("-${key}:`$false")
                 }
