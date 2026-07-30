@@ -92,25 +92,64 @@ function ConvertFrom-PSTSMAction {
         return $result
     }
 
-    # Split respecting double quotes.
+    # Tokenise by the CommandLineToArgvW rules - the exact inverse of what
+    # ConvertTo-PSTSMQuotedValue writes. This has to be the inverse, or reopening a task in the
+    # editor silently rewrites its own arguments.
+    #
+    # The rules, which are not the obvious ones:
+    #   - backslashes are literal EXCEPT immediately before a double quote
+    #   - 2n backslashes + quote  -> n backslashes, and the quote toggles quoting
+    #   - 2n+1 backslashes + quote -> n backslashes and a LITERAL quote
+    #
+    # The previous implementation treated any quote preceded by a single backslash as escaped and
+    # never consumed the backslashes. A value ending in one - every "C:\Program Files\App\" - is
+    # emitted by the quoter as \\" , which it read as an escaped quote, so $inQuotes stuck on and
+    # the remainder of the command line was swallowed into that one value. Every later parameter
+    # vanished, and a switch that had been present came back absent.
     $tokens = New-Object System.Collections.Generic.List[string]
     $current = New-Object System.Text.StringBuilder
     $inQuotes = $false
-    for ($i = 0; $i -lt $Arguments.Length; $i++) {
+    # Tracked separately from $current.Length so that an explicitly empty argument ("") survives
+    # as an empty token instead of disappearing.
+    $started = $false
+    $i = 0
+    while ($i -lt $Arguments.Length) {
         $ch = $Arguments[$i]
+
+        if ($ch -eq '\') {
+            $slashes = 0
+            while ($i -lt $Arguments.Length -and $Arguments[$i] -eq '\') { $slashes++; $i++ }
+            if ($i -lt $Arguments.Length -and $Arguments[$i] -eq '"') {
+                [void]$current.Append('\' * [math]::Floor($slashes / 2))
+                if ($slashes % 2 -eq 1) { [void]$current.Append('"') }   # escaped, literal quote
+                else { $inQuotes = -not $inQuotes }                       # delimiter
+                $i++
+            }
+            else {
+                [void]$current.Append('\' * $slashes)                     # not before a quote: literal
+            }
+            $started = $true
+            continue
+        }
+
         if ($ch -eq '"') {
-            # \" is an escaped quote, not a delimiter.
-            if ($i -gt 0 -and $Arguments[$i - 1] -eq '\') { [void]$current.Append('"'); continue }
             $inQuotes = -not $inQuotes
+            $started = $true
+            $i++
             continue
         }
-        if ($ch -eq ' ' -and -not $inQuotes) {
-            if ($current.Length -gt 0) { [void]$tokens.Add($current.ToString()); [void]$current.Clear() }
+
+        if (($ch -eq ' ' -or $ch -eq "`t") -and -not $inQuotes) {
+            if ($started) { [void]$tokens.Add($current.ToString()); [void]$current.Clear(); $started = $false }
+            $i++
             continue
         }
+
         [void]$current.Append($ch)
+        $started = $true
+        $i++
     }
-    if ($current.Length -gt 0) { [void]$tokens.Add($current.ToString()) }
+    if ($started) { [void]$tokens.Add($current.ToString()) }
 
     # --- engine switches, up to -File / -Command ---------------------------------------
     # PowerShell abbreviates host switches down to any unambiguous prefix, so -nop, -noni and
@@ -202,10 +241,18 @@ function ConvertFrom-PSTSMAction {
                 $idx++
             }
             else {
-                if ($next -match ',') { $params[$name] = @($next -split ',') }
-                elseif ($next -match '(?i)^\$?true$') { $params[$name] = $true }
+                # No comma-splitting. $next has already been through the tokeniser, so a comma in
+                # it was inside quotes and is part of the value - "Quarter close, please review"
+                # is one subject line, not two. Under -File, PowerShell never splits a quoted
+                # argument on commas either, so an array can never legitimately arrive this way.
+                if ($next -match '(?i)^\$?true$') { $params[$name] = $true }
                 elseif ($next -match '(?i)^\$?false$') { $params[$name] = $false }
-                elseif ($next -match '^-?\d+$') { $params[$name] = [int]$next }
+                # TryParse rather than a cast: the regex matches any run of digits, and a value
+                # like a phone number overflows Int32. The cast threw, and nothing up the call
+                # chain caught it - one such task emptied the entire list.
+                elseif ($next -match '^-?\d+$' -and [int]::TryParse($next, [ref]$null)) {
+                    $params[$name] = [int]$next
+                }
                 else { $params[$name] = $next }
                 $idx += 2
             }

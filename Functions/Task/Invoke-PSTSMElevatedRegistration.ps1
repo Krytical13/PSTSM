@@ -181,9 +181,13 @@ function Invoke-PSTSMElevatedRegistration {
 
         # Quote every argument as one string. Start-Process quotes an array inconsistently
         # between engines, and a path with a space would otherwise arrive split in two.
-        $argLine = ($helperArgs | ForEach-Object {
-                if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-            }) -join ' '
+        #
+        # Uses the module's own encoder rather than a local one. The local version escaped quotes
+        # but not backslash runs, so a value ending in a backslash - and RemoveTaskPath always
+        # does, being a task folder - emitted "\My Tasks\" , where the trailing backslash escapes
+        # the closing quote. The unregister then failed, and because a failed cleanup is only a
+        # warning, the old privileged task kept firing alongside its replacement.
+        $argLine = ($helperArgs | ForEach-Object { ConvertTo-PSTSMQuotedValue -Value $_ }) -join ' '
 
         try {
             $startArgs = @{

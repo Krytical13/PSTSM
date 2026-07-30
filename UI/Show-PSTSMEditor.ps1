@@ -568,8 +568,13 @@ function Show-PSTSMEditor {
         $wantShield = $needsElevation -and -not $state.IsElevated
         if ($wantShield -ne [bool]$btnSave.Image) {
             if ($wantShield) {
-                $shield = New-Object System.Drawing.Bitmap([System.Drawing.SystemIcons]::Shield.ToBitmap(), 16, 16)
-                $btnSave.Image = $shield
+                # ToBitmap() hands back a NEW bitmap at the icon's native size, and the resizing
+                # constructor copies from it rather than taking ownership - so without this the
+                # full-size original leaks on every toggle. SystemIcons::Shield itself is a shared
+                # static and must not be disposed.
+                $raw = [System.Drawing.SystemIcons]::Shield.ToBitmap()
+                try { $btnSave.Image = New-Object System.Drawing.Bitmap($raw, 16, 16) }
+                finally { $raw.Dispose() }
                 $btnSave.ImageAlign = [System.Drawing.ContentAlignment]::MiddleLeft
                 $btnSave.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
                 $btnSave.TextImageRelation = [System.Windows.Forms.TextImageRelation]::ImageBeforeText

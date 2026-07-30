@@ -116,7 +116,11 @@ function New-PSTSMTriggerSpec {
     [PSCustomObject]@{
         PSTypeName         = 'PSTSM.TriggerSpec'
         Type               = $Type
-        At                 = if ($startBoundary) { $startBoundary.ToString('yyyy-MM-ddTHH:mm:ss') } else { $null }
+        # InvariantCulture is not optional here. In a .NET custom format string ':' means
+        # DateTimeFormatInfo.TimeSeparator, not a literal colon - so under fi-FI, da-DK, id-ID and
+        # others this wrote 2026-07-30T07.00.00. Every reader parses invariantly, so the trigger
+        # became unregisterable and the exported plan stopped being portable between machines.
+        At                 = if ($startBoundary) { $startBoundary.ToString('yyyy-MM-ddTHH:mm:ss', [cultureinfo]::InvariantCulture) } else { $null }
         DaysOfWeek         = if ($DaysOfWeek) { @($DaysOfWeek) } else { @() }
         DaysInterval       = $DaysInterval
         WeeksInterval      = $WeeksInterval

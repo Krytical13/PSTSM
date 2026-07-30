@@ -404,10 +404,19 @@ break production.
 
 ## Tests
 
+Needs **Pester 5**. Windows ships Pester 3.4 in `C:\Program Files\WindowsPowerShell\Modules`, and
+these suites will not run on it — if `New-PesterConfiguration` is missing, that is what happened:
+
 ```powershell
-Invoke-Pester -Path .\Tests\PSTSM.Tests.ps1      # engine, 86 tests
-Invoke-Pester -Path .\Tests\PSTSM.UI.Tests.ps1   # UI, 23 tests
+Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force
+
+Invoke-Pester -Path .\Tests\PSTSM.Tests.ps1      # engine
+Invoke-Pester -Path .\Tests\PSTSM.UI.Tests.ps1   # UI
 ```
+
+Note that `Install-Module -Scope CurrentUser` from `pwsh` puts Pester in `Documents\PowerShell\`,
+which Windows PowerShell **cannot see** — it looks in `Documents\WindowsPowerShell\`. Install it
+from whichever host you intend to test with, or import it by full path.
 
 Nothing in either suite registers a real scheduled task. The engine suite is offline apart from
 one test that launches PowerShell to prove wrapper argument forwarding. The UI suite lints for
@@ -428,8 +437,13 @@ A green MTA run means much less than it looks like; the suite prints which apart
 
 Windows PowerShell 5.1 or PowerShell 7+, on Windows. The `ScheduledTasks` module (in-box) is
 needed only for `Get-PSTSMInventory`, `Register-PSTSMPlan` and `ConvertFrom-PSTSMDefinition`;
-the derivation and argument-building commands run anywhere. Registering a task generally
-requires elevation.
+the derivation and argument-building commands run anywhere.
+
+Registering a task that runs as you at normal privilege needs **no** elevation — see
+[the table above](#elevation-belongs-to-the-task-not-to-opening-the-tool) for the short list that
+does. Calling `Register-PSTSMPlan` directly from a script is the one case with no way to ask: it
+has no UI to prompt from, so its preflight raises `NEEDS_ELEVATION` as a hard error rather than
+letting Windows refuse the registration with a bare "Access is denied".
 
 Set `PSTSM_NODIALOG=1` in any automated run. Without it, an exception inside a WinForms
 handler reaches the global handler and pops a modal message box on the desktop of whoever is at

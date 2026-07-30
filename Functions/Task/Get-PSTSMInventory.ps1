@@ -81,7 +81,11 @@ function Get-PSTSMInventory {
             LastTaskResult   = if ($info) { $info.LastTaskResult } else { $null }
             LastResultText   = if ($info) { ConvertFrom-PSTSMResultCode -Code $info.LastTaskResult } else { $null }
             NextRunTime      = if ($info) { $info.NextRunTime } else { $null }
-            NumberOfMissed   = if ($info) { $info.NumberOfMissedRuns } else { $null }
+            # Named for the source property, not shortened. Test-PSTSMHealth reads
+            # NumberOfMissedRuns, so the abbreviation here meant its MISSED_RUNS check compared
+            # $null against 0 forever and could never fire - silently, on a machine that had
+            # tasks with missed runs to report.
+            NumberOfMissedRuns = if ($info) { $info.NumberOfMissedRuns } else { $null }
 
             # Principal
             UserId           = $principal.UserId
@@ -133,7 +137,14 @@ function ConvertFrom-PSTSMResultCode {
     if ($null -eq $Code) { return $null }
     $c = [int64]$Code
     # Result codes are reported as signed ints; compare on the unsigned 32-bit value.
-    $u = [uint32]($c -band 0xFFFFFFFF)
+    #
+    # Both halves of this need the L suffix, and neither had it. An 8-digit hex literal with the
+    # high bit set is an Int32 in PowerShell, so 0xFFFFFFFF is -1 and the mask was a no-op that
+    # left $c negative - then [uint32] on a negative number threw, which took out the caller.
+    # The case labels below are the same literal form, so every one of them was a negative Int32
+    # that a non-negative value could never equal: all eight HRESULT decodes were unreachable,
+    # including the batch-logon-right one the preflight names to the operator.
+    $u = $c -band 0xFFFFFFFFL
 
     switch ($u) {
         0x0 { return 'Success (0x0) - note: also what an unhandled failure reports if the script sets no exit code' }
@@ -148,14 +159,14 @@ function ConvertFrom-PSTSMResultCode {
         0x41306 { return 'Task was terminated by the user (0x41306)' }
         0x41307 { return 'Task terminated - execution time limit exceeded (0x41307)' }
         0x41308 { return 'Task terminated - could not start (0x41308)' }
-        0x8004131F { return 'An instance is already running (0x8004131F)' }
-        0x80041309 { return "Trigger does not have a set run time (0x80041309)" }
-        0x8007010B { return 'Directory name is invalid (0x8007010B) - check "Start in"' }
-        0x80070002 { return 'File not found (0x80070002)' }
-        0x80070005 { return 'Access denied (0x80070005)' }
-        0x80070534 { return 'Account has no "Log on as a batch job" right (0x80070534)' }
-        0x800704DD { return 'Not logged on - S4U/Interactive task needs an interactive session (0x800704DD)' }
-        0x800710E0 { return 'Operator/administrator refused the request (0x800710E0)' }
+        0x8004131FL { return 'An instance is already running (0x8004131F)' }
+        0x80041309L { return "Trigger does not have a set run time (0x80041309)" }
+        0x8007010BL { return 'Directory name is invalid (0x8007010B) - check "Start in"' }
+        0x80070002L { return 'File not found (0x80070002)' }
+        0x80070005L { return 'Access denied (0x80070005)' }
+        0x80070534L { return 'Account has no "Log on as a batch job" right (0x80070534)' }
+        0x800704DDL { return 'Not logged on - S4U/Interactive task needs an interactive session (0x800704DD)' }
+        0x800710E0L { return 'Operator/administrator refused the request (0x800710E0)' }
         default { return ('0x{0:X}' -f $u) }
     }
 }

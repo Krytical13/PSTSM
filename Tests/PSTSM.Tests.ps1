@@ -1265,3 +1265,161 @@ Describe 'Launcher stays in step with the script it launches' {
         $script:Cmd | Should -Not -Match '(?i)relaunches itself elevated'
     }
 }
+
+Describe 'Regressions from the 0.4.1 review pass' {
+    # Every bug below shipped while 197 tests were green, so each gets a test that fails against
+    # the old behaviour. The pattern is the same throughout: the happy path was covered and the
+    # values that actually break things were not.
+
+    Context 'Argument round trip is lossless' {
+        # ConvertFrom-PSTSMAction must be the exact inverse of ConvertTo-PSTSMArgument. It was
+        # not: it treated any quote preceded by one backslash as escaped and never consumed the
+        # backslashes, so a value ending in one - every "C:\Program Files\App\" - left the parser
+        # stuck inside a quoted run and swallowed the rest of the command line. Later parameters
+        # silently disappeared and a switch that had been set came back unset.
+        $cases = @(
+            @{ Name = 'plain'; Value = 'mail.contoso.com' }
+            @{ Name = 'spaced path'; Value = 'C:\Program Files\App' }
+            @{ Name = 'trailing slash'; Value = 'C:\Program Files\App\' }
+            @{ Name = 'bare trailing'; Value = 'C:\Logs\' }
+            @{ Name = 'embedded quote'; Value = 'said "hi"' }
+            @{ Name = 'comma'; Value = 'Quarter close, please review' }
+            @{ Name = 'apostrophe'; Value = "O'Brien" }
+            @{ Name = 'double backslash'; Value = 'a\\b' }
+            @{ Name = 'quote then slash'; Value = 'x"y\' }
+            @{ Name = 'semicolon amp'; Value = 'a; b & c' }
+        )
+        It 'survives <Name> without losing the value or the parameters after it' -TestCases $cases {
+            param($Name, $Value)
+            $params = [ordered]@{ Value = $Value; Marker = 'SENTINEL'; Flag = $true }
+            $rendered = ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters $params
+            $back = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments $rendered
+
+            $back.Parameters['Value'] | Should -Be $Value -Because "a $Name value must survive verbatim"
+            # The sentinel is the real assertion. A tokeniser that mishandles the value tends to
+            # eat everything after it, and that is the damaging half of the bug.
+            $back.Parameters['Marker'] | Should -Be 'SENTINEL' -Because "a $Name value must not swallow later parameters"
+            $back.Parameters['Flag'] | Should -BeTrue -Because "a $Name value must not lose a trailing switch"
+        }
+
+        It 'keeps a comma inside one value instead of splitting it into an array' {
+            $back = ConvertFrom-PSTSMAction -Execute 'powershell.exe' `
+                -Arguments '-File "C:\s.ps1" -Subject "Quarter close, please review"'
+            $back.Parameters['Subject'] | Should -BeOfType [string]
+        }
+
+        It 'does not throw on a numeric argument too large for Int32' {
+            # A phone number is enough. The cast threw, nothing up the chain caught it, and
+            # Get-PSTSMInventory discarded even the rows it had already produced - so one bad
+            # task anywhere on the machine emptied the entire list.
+            # Called directly, not inside a { } | Should -Not -Throw: a scriptblock gets its own
+            # scope, so the assignment would not escape it and every later assertion would run
+            # against $null. A throw still fails the test, just as an error rather than a
+            # failed expectation.
+            $back = ConvertFrom-PSTSMAction -Execute 'powershell.exe' `
+                -Arguments '-File "C:\s.ps1" -Phone 5551234567'
+            $back.Parameters['Phone'] | Should -Be '5551234567'
+        }
+    }
+
+    Context 'Generated log wrapper' {
+        BeforeAll {
+            $script:WrapDir = Join-Path $TestDrive 'wrap'
+            New-Item -ItemType Directory -Path $script:WrapDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $script:WrapDir 'demo.ps1') -Value 'param([string]$X) "hi"'
+        }
+
+        It 'parses when the task name contains an apostrophe' {
+            # __TASK_NAME__ lands inside a single-quoted string and was the one placeholder
+            # without doubling. The task registered fine and then failed every run with a parse
+            # error and no transcript to explain it.
+            $plan = New-PSTSMPlan -ScriptPath (Join-Path $script:WrapDir 'demo.ps1') -TaskName "O'Brien Report"
+            $plan.Logging.Mode = 'Transcript'
+            $wrapper = New-PSTSMLogWrapper -Plan $plan
+            $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$errs)
+            @($errs) | Should -HaveCount 0
+        }
+
+        It 'scopes log retention to its own transcripts' {
+            # A bare *.log swept the whole directory. The default directory is the script's own
+            # Logs folder, so it deleted the script's application logs and other tasks'
+            # transcripts - inside a finally, behind SilentlyContinue, reporting nothing.
+            $plan = New-PSTSMPlan -ScriptPath (Join-Path $script:WrapDir 'demo.ps1') -TaskName 'Scoped'
+            $plan.Logging.Mode = 'Transcript'
+            $text = Get-Content -LiteralPath (New-PSTSMLogWrapper -Plan $plan) -Raw
+            $text | Should -Not -Match ([regex]::Escape("-Filter '*.log'"))
+            $text | Should -Match ([regex]::Escape("-Filter 'Scoped_*.log'"))
+        }
+    }
+
+    Context 'Culture independence' {
+        # ':' in a .NET custom format string means DateTimeFormatInfo.TimeSeparator, not a colon.
+        $cultures = @(
+            @{ Culture = 'en-US' }, @{ Culture = 'fi-FI' }, @{ Culture = 'da-DK' }, @{ Culture = 'id-ID' }
+        )
+        It 'writes an invariant trigger time under <Culture>' -TestCases $cultures {
+            param($Culture)
+            $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                $spec = New-PSTSMTriggerSpec -Type Daily -At '07:00'
+                $spec.At | Should -Match 'T\d{2}:\d{2}:\d{2}$'
+            }
+            finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved }
+        }
+    }
+
+    Context 'Result code decoding' {
+        # An 8-digit hex literal with the high bit set is a NEGATIVE Int32 in PowerShell, so every
+        # HRESULT case label was unreachable - and the mask meant to normalise the input was
+        # itself written 0xFFFFFFFF, i.e. -1, so it did nothing and the following [uint32] cast
+        # threw on exactly the codes it was supposed to handle.
+        $codes = @(
+            @{ Code = 0x80070534; Expect = 'batch job' }
+            @{ Code = 0x80070005; Expect = 'Access denied' }
+            @{ Code = 0x8004131F; Expect = 'already running' }
+            @{ Code = 0x800704DD; Expect = 'Not logged on' }
+            @{ Code = 0x8007010B; Expect = 'Directory name' }
+        )
+        It 'decodes HRESULT <Code> rather than echoing it' -TestCases $codes {
+            param($Code, $Expect)
+            # Direct call for the same reason as above - the old form asserted against $null and
+            # would have passed on a function that returned nothing at all.
+            $text = ConvertFrom-PSTSMResultCode -Code $Code
+            $text | Should -BeLike "*$Expect*"
+        }
+
+        It 'still decodes the small positive codes' {
+            ConvertFrom-PSTSMResultCode -Code 0x41303 | Should -BeLike '*never run*'
+            ConvertFrom-PSTSMResultCode -Code 0 | Should -BeLike '*Success*'
+        }
+    }
+
+    Context 'Cross-function agreement' {
+        BeforeAll { $script:Root = Split-Path $PSScriptRoot -Parent }
+
+        It 'emits the missed-run property name the health check reads' {
+            # These disagreed - inventory emitted NumberOfMissed, the check read
+            # NumberOfMissedRuns - so MISSED_RUNS could never fire, on a machine that had missed
+            # runs to report. Asserted against source so it holds on any machine.
+            $inv = Get-Content -LiteralPath (Join-Path $script:Root 'Functions/Task/Get-PSTSMInventory.ps1') -Raw
+            $health = Get-Content -LiteralPath (Join-Path $script:Root 'Functions/Task/Test-PSTSMHealth.ps1') -Raw
+            $emitted = @([regex]::Matches($inv, 'NumberOfMissed\w*') | ForEach-Object { $_.Value }) | Sort-Object -Unique
+            $read = @([regex]::Matches($health, '\$row\.(NumberOfMissed\w*)') | ForEach-Object { $_.Groups[1].Value }) | Sort-Object -Unique
+            $read | Should -Not -BeNullOrEmpty -Because 'the check must actually read something'
+            foreach ($r in $read) { $emitted | Should -Contain $r -Because "Test-PSTSMHealth reads $r" }
+        }
+
+        It 'quotes elevated-helper arguments with the module encoder rather than a local one' {
+            # The local version escaped quotes but not backslash runs, so a task folder - which
+            # always ends in one - produced a trailing backslash that escaped the closing quote.
+            # The stale task then survived a rename as a live privileged duplicate.
+            $src = Get-Content -LiteralPath (Join-Path $script:Root 'Functions/Task/Invoke-PSTSMElevatedRegistration.ps1') -Raw
+            $src | Should -Match 'ConvertTo-PSTSMQuotedValue'
+            ConvertTo-PSTSMQuotedValue -Value '\My Tasks\' | Should -Be '"\My Tasks\\"'
+        }
+    }
+}
+

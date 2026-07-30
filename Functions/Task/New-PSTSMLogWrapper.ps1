@@ -102,7 +102,12 @@ finally {
     if ($retentionDays -gt 0) {
         try {
             $cutoff = (Get-Date).AddDays(-$retentionDays)
-            Get-ChildItem -LiteralPath $logDirectory -Filter '*.log' -ErrorAction SilentlyContinue |
+            # Scoped to THIS task's own transcripts. A bare '*.log' swept the whole directory -
+            # and the default directory is the script's own Logs folder, so it deleted the
+            # script's application logs, other PSTSM tasks' transcripts, and anything else that
+            # happened to live there. Silently, inside a finally, behind SilentlyContinue.
+            # -Filter's only wildcards are * and ?, both removed by the name sanitiser.
+            Get-ChildItem -LiteralPath $logDirectory -Filter '__TASK_NAME___*.log' -ErrorAction SilentlyContinue |
                 Where-Object { $_.LastWriteTime -lt $cutoff } |
                 Remove-Item -Force -ErrorAction SilentlyContinue
         }
@@ -113,10 +118,15 @@ finally {
 exit $exitCode
 '@
 
+    # Every placeholder lands inside a single-quoted string in the template, so every one needs
+    # its apostrophes doubled. __TASK_NAME__ was the one that did not: a task called
+    # "O'Brien Report" produced a wrapper that failed to parse, so the task registered happily and
+    # then failed on every single run with a bare parse error and no transcript to explain it.
+    # $safeName itself stays undoubled - it is also the wrapper's filename.
     $content = $template.
     Replace('__SCRIPT_PATH__', ($Plan.ScriptPath -replace "'", "''")).
     Replace('__LOG_DIR__', ($logDir -replace "'", "''")).
-    Replace('__TASK_NAME__', $safeName).
+    Replace('__TASK_NAME__', ($safeName -replace "'", "''")).
     Replace('__RETENTION__', $retention.ToString())
 
     if ($PSCmdlet.ShouldProcess($wrapperPath, 'Write task log wrapper')) {
