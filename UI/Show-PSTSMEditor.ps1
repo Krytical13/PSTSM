@@ -72,6 +72,10 @@ function Show-PSTSMEditor {
         Locked        = $false     # existing task whose action we must not rewrite
         OriginalName  = $null
         OriginalPath  = $null
+        # Read once. A session cannot gain an administrator token while it runs, so re-asking on
+        # every keystroke would only cost time - and any elevated work happens in a child process
+        # that does not change the answer here.
+        IsElevated    = (Test-PSTSMElevated)
     }
 
     if ($Plan) {
@@ -551,7 +555,31 @@ function Show-PSTSMEditor {
 
         $lvChecks.BeginUpdate()
         $lvChecks.Items.Clear()
-        $checks = @(Test-PSTSMPlan -Plan $plan)
+        # -CanElevate: this window does not have to be elevated to save a privileged task, it
+        # hands the plan to an elevated helper. Saying so keeps NEEDS_ELEVATION out of the error
+        # count, which would otherwise disable the very button that resolves it.
+        $checks = @(Test-PSTSMPlan -Plan $plan -CanElevate)
+
+        # The shield is the standard signal that a control leads to a consent prompt. It confers
+        # nothing by itself - the elevation still happens in the handler - but it means the prompt
+        # is never a surprise. SystemIcons is used rather than BCM_SETSHIELD because that message
+        # only draws on FlatStyle=System buttons, and these are FlatStyle=Flat by theme.
+        $needsElevation = @(Test-PSTSMPlanNeedsElevation -Plan $plan).Count -gt 0
+        $wantShield = $needsElevation -and -not $state.IsElevated
+        if ($wantShield -ne [bool]$btnSave.Image) {
+            if ($wantShield) {
+                $shield = New-Object System.Drawing.Bitmap([System.Drawing.SystemIcons]::Shield.ToBitmap(), 16, 16)
+                $btnSave.Image = $shield
+                $btnSave.ImageAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+                $btnSave.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+                $btnSave.TextImageRelation = [System.Windows.Forms.TextImageRelation]::ImageBeforeText
+            }
+            else {
+                if ($btnSave.Image) { $btnSave.Image.Dispose() }
+                $btnSave.Image = $null
+                $btnSave.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+            }
+        }
         $ordered = $checks | Sort-Object @{ Expression = { (Get-PSTSMUISeverityStyle -Severity $_.Severity).Rank } }
         $errorCount = 0
         foreach ($c in $ordered) {
@@ -921,44 +949,80 @@ function Show-PSTSMEditor {
             $plan = & $buildPlan
             if (-not $plan) { return }
 
-            $password = $null
-            if ($plan.Principal.LogonType -eq 'Password') {
-                $cred = $host.UI.PromptForCredential('Task account password',
-                    "Enter the password for $($plan.Principal.UserId). It is handed straight to Task Scheduler and never stored in the plan.",
-                    $plan.Principal.UserId, '')
-                if (-not $cred) { return }
-                $password = $cred.Password
-            }
-
             # Renaming an existing task creates a new one; remove the old registration so the
             # edit does not silently leave a duplicate behind.
             $renamed = $state.IsEdit -and
                        (($state.OriginalName -ne $plan.TaskName) -or ($state.OriginalPath -ne $plan.TaskPath))
 
-            try {
-                if ($password) {
-                    Register-PSTSMPlan -Plan $plan -Password $password -Confirm:$false
+            $needsElevation = @(Test-PSTSMPlanNeedsElevation -Plan $plan).Count -gt 0
+
+            if ($needsElevation -and -not $state.IsElevated) {
+                # Elevate for this one registration rather than for the whole session. Windows
+                # cannot raise the privileges of a running process, so "elevate on save" means
+                # handing the finished plan to a short-lived elevated helper - which is also what
+                # keeps everything typed into this window if the operator declines the prompt.
+                $prev = $form.Cursor
+                $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+                try {
+                    $elevArgs = @{ Plan = $plan; Confirm = $false }
+                    if ($renamed) {
+                        $elevArgs['RemoveTaskName'] = $state.OriginalName
+                        $elevArgs['RemoveTaskPath'] = $state.OriginalPath
+                    }
+                    $outcome = Invoke-PSTSMElevatedRegistration @elevArgs
                 }
-                else {
-                    Register-PSTSMPlan -Plan $plan -Confirm:$false
+                finally { $form.Cursor = $prev }
+
+                # Declining the prompt is a decision, not an error. Say nothing and leave the
+                # window exactly as it was so the choice can be revisited or changed.
+                if ($outcome.Cancelled) { return }
+
+                if (-not $outcome.Success) {
+                    [System.Windows.Forms.MessageBox]::Show($outcome.Error, 'Could not register the task',
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                    return
                 }
 
-                if ($renamed) {
-                    try {
-                        Unregister-ScheduledTask -TaskName $state.OriginalName -TaskPath $state.OriginalPath -Confirm:$false -ErrorAction Stop
-                    }
-                    catch {
-                        [System.Windows.Forms.MessageBox]::Show(
-                            "The task was saved as '$($plan.TaskName)', but the original '$($state.OriginalName)' could not be removed:`n$($_.Exception.Message)",
-                            'Old task still present', [System.Windows.Forms.MessageBoxButtons]::OK,
-                            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-                    }
+                foreach ($w in @($outcome.Warnings)) {
+                    [System.Windows.Forms.MessageBox]::Show($w, 'Saved, with one thing to note',
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
                 }
             }
-            catch {
-                [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not register the task',
-                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-                return
+            else {
+                $password = $null
+                if ($plan.Principal.LogonType -eq 'Password') {
+                    $cred = $host.UI.PromptForCredential('Task account password',
+                        "Enter the password for $($plan.Principal.UserId). It is handed straight to Task Scheduler and never stored in the plan.",
+                        $plan.Principal.UserId, '')
+                    if (-not $cred) { return }
+                    $password = $cred.Password
+                }
+
+                try {
+                    if ($password) {
+                        Register-PSTSMPlan -Plan $plan -Password $password -Confirm:$false
+                    }
+                    else {
+                        Register-PSTSMPlan -Plan $plan -Confirm:$false
+                    }
+
+                    if ($renamed) {
+                        try {
+                            Unregister-ScheduledTask -TaskName $state.OriginalName -TaskPath $state.OriginalPath -Confirm:$false -ErrorAction Stop
+                        }
+                        catch {
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "The task was saved as '$($plan.TaskName)', but the original '$($state.OriginalName)' could not be removed:`n$($_.Exception.Message)",
+                                'Old task still present', [System.Windows.Forms.MessageBoxButtons]::OK,
+                                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                        }
+                    }
+                }
+                catch {
+                    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not register the task',
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                    return
+                }
             }
 
             $state.SavedPlan = $plan

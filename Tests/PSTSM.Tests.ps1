@@ -578,9 +578,10 @@ exit 0
     }
 
     It 'blocks a task that needs administrator rights when the session has none' {
-        # Microsoft's rule (Security Contexts for Tasks): from a low-privilege process you
-        # cannot register RunLevel HIGHEST, Local System, Builtin\Administrator or a group.
-        # Windows rejects it outright rather than silently downgrading, so this is an Error.
+        # Measured, not assumed. Under a genuine UAC-filtered token (TokenElevationType=3,
+        # TokenIsElevated=0) RunLevel=Limited registers and RunLevel=Highest returns
+        # "Access is denied" - Windows refuses outright rather than silently downgrading, so a
+        # caller that cannot elevate deserves a hard stop rather than a bare Win32 error later.
         $system = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM'
         $r = Test-PSTSMPlan -Plan $system -SkipExistingTaskCheck -IsElevated $false
         ($r | Where-Object Id -eq 'NEEDS_ELEVATION').Severity | Should -Be 'Error' -Because 'it runs as SYSTEM'
@@ -592,6 +593,17 @@ exit 0
         $group = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Group' -UserId 'CONTOSO\Operators'
         $r = Test-PSTSMPlan -Plan $group -SkipExistingTaskCheck -IsElevated $false
         ($r | Where-Object Id -eq 'NEEDS_ELEVATION').Severity | Should -Be 'Error' -Because 'it runs for a group'
+    }
+
+    It 'downgrades NEEDS_ELEVATION to information for a caller that can elevate on demand' {
+        # The UI hands a privileged plan to an elevated helper, so there is nothing for the
+        # operator to fix. Left as an Error it would count towards the error total and disable
+        # the very Save button that resolves it.
+        $highest = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'
+        $r = Test-PSTSMPlan -Plan $highest -SkipExistingTaskCheck -IsElevated $false -CanElevate
+        $check = $r | Where-Object Id -eq 'NEEDS_ELEVATION'
+        $check.Severity | Should -Be 'Info'
+        @($r | Where-Object { $_.Severity -eq 'Error' }) | Should -HaveCount 0 -Because 'nothing here blocks a save'
     }
 
     It 'does not mention elevation for a task that runs as you at normal privilege' {
@@ -1043,5 +1055,124 @@ Describe 'ConvertFrom-PSTSMResultCode' {
     }
     It 'returns null for no result' {
         ConvertFrom-PSTSMResultCode -Code $null | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Elevation boundary' {
+    # These encode behaviour measured on a real Windows 11 box across four distinct token
+    # shapes, because the documentation and the observed behaviour disagree in a way that is
+    # easy to get wrong twice:
+    #
+    #   elevated (ElevType=2)                     Limited OK   Highest OK
+    #   UAC-filtered admin (ElevType=3)           Limited OK   Highest ACCESS DENIED
+    #   SAFER-restricted (runas /trustlevel)      IsElevated=1, so NOT a valid proxy for
+    #                                             "un-elevated" even though IsInRole is false
+    #   true standard user (ElevType=1)           cannot register at all
+    #
+    # The third row is the trap: runas /trustlevel strips the Administrators SID to deny-only,
+    # so IsInRole() reports false while the kernel still reports TokenIsElevated=1. Measuring
+    # elevation with IsInRole against such a token gives the wrong answer.
+
+    It 'names every property that requires an administrator token, and nothing else' {
+        # Highest on its own is exactly one reason.
+        $highest = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'
+        @(Test-PSTSMPlanNeedsElevation -Plan $highest) | Should -Be @('it runs with highest privileges')
+
+        # A service account cannot be isolated: New-PSTSMPlan pins RunLevel to Highest for one,
+        # because those principals are built-in SIDs that always run elevated. So this asserts
+        # the logon type is *named*, and that both reasons accumulate rather than one masking the
+        # other - the operator should be told everything that needs consent, not just the first.
+        $system = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM'
+        $systemReasons = @(Test-PSTSMPlanNeedsElevation -Plan $system)
+        $systemReasons | Should -Contain 'it runs as SYSTEM'
+        $systemReasons | Should -Contain 'it runs with highest privileges'
+        $systemReasons | Should -HaveCount 2
+
+        $group = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Group' -UserId 'CONTOSO\Operators' -RunLevel 'Limited'
+        @(Test-PSTSMPlanNeedsElevation -Plan $group) | Should -Be @('it runs for a group')
+
+        # The case that must stay unprivileged: your own task, at your own privilege level.
+        $ordinary = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Interactive' -RunLevel 'Limited'
+        @(Test-PSTSMPlanNeedsElevation -Plan $ordinary) | Should -HaveCount 0
+    }
+
+    It 'treats an at-startup trigger as needing administrator rights' {
+        # Documented on the RegisterTaskDefinition reference rather than the security page:
+        # "Only a member of the Administrators group can create a task with a boot trigger."
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Interactive' -RunLevel 'Limited' `
+            -Trigger @(New-PSTSMTriggerSpec -Type 'AtStartup')
+        @(Test-PSTSMPlanNeedsElevation -Plan $plan) | Should -HaveCount 1
+
+        # A time-based trigger is not privileged, so it must not drag a consent prompt in with it.
+        $daily = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Interactive' -RunLevel 'Limited' `
+            -Trigger @(New-PSTSMTriggerSpec -Type 'Daily' -At '03:00')
+        @(Test-PSTSMPlanNeedsElevation -Plan $daily) | Should -HaveCount 0
+    }
+
+    It 'agrees with the preflight check, so the tool never elevates for nothing' {
+        # One definition, two consumers. If they drift, PSTSM either raises a consent prompt no
+        # registration needed, or lets one fail with a bare "Access is denied".
+        foreach ($plan in @(
+                (New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'),
+                (New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Interactive' -RunLevel 'Limited'),
+                (New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM')
+            )) {
+            $viaHelper = @(Test-PSTSMPlanNeedsElevation -Plan $plan).Count -gt 0
+            $viaCheck = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck -IsElevated $false |
+                    Where-Object Id -eq 'NEEDS_ELEVATION').Count -gt 0
+            $viaCheck | Should -Be $viaHelper -Because "both must agree about $($plan.Principal.RunLevel)/$($plan.Principal.LogonType)"
+        }
+    }
+
+    It 'reports elevation from the token, not from group membership' {
+        # Test-PSTSMElevated must answer "is this token elevated", which is what the Task
+        # Scheduler service checks - not "is this account an administrator".
+        Test-PSTSMElevated | Should -BeOfType [bool]
+        $expected = (New-Object Security.Principal.WindowsPrincipal(
+                [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+        Test-PSTSMElevated | Should -Be $expected
+    }
+}
+
+Describe 'Invoke-PSTSMElevatedRegistration' {
+    It 'reports a missing helper instead of throwing' {
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'
+        $r = Invoke-PSTSMElevatedRegistration -Plan $plan -HelperPath (Join-Path $TestDrive 'nope.ps1') -Confirm:$false
+        $r.Success | Should -BeFalse
+        $r.Error | Should -BeLike '*not found*'
+    }
+
+    It 'does nothing under -WhatIf' {
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest'
+        $r = Invoke-PSTSMElevatedRegistration -Plan $plan -WhatIf
+        $r.Success | Should -BeFalse
+        $r.Error | Should -BeNullOrEmpty -Because 'it never got as far as trying'
+    }
+
+    It 'carries the plan through a real export/import round trip without a secret' {
+        # This is the broker's data channel, so what crosses it has to be both complete and
+        # free of credentials.
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest' `
+            -Parameters ([ordered]@{ Path = 'C:\a b\c.txt' })
+        $f = Join-Path $TestDrive 'channel.json'
+        Export-PSTSMPlan -Plan $plan -Path $f
+        (Get-Content -LiteralPath $f -Raw) | Should -Not -Match '(?i)password\s*"?\s*:\s*"[^"]+"'
+        $back = Import-PSTSMPlan -Path $f -KeepEnginePath
+        $back.TaskName | Should -Be $plan.TaskName
+        $back.Principal.RunLevel | Should -Be 'Highest'
+        $back.ArgumentString | Should -Be $plan.ArgumentString
+    }
+
+    It 'ships a helper that parses and takes the parameters the broker passes' {
+        $helper = Join-Path (Split-Path $PSScriptRoot -Parent) 'PSTSM.Elevate.ps1'
+        Test-Path -LiteralPath $helper | Should -BeTrue
+        $errs = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($helper, [ref]$null, [ref]$errs)
+        @($errs) | Should -HaveCount 0
+        $cmd = Get-Command $helper
+        foreach ($p in 'PlanPath', 'ResultPath', 'PromptForPassword', 'RemoveTaskName', 'RemoveTaskPath') {
+            $cmd.Parameters.Keys | Should -Contain $p
+        }
     }
 }

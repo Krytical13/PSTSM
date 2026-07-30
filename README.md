@@ -22,36 +22,64 @@ That's the entry point because Windows opens a `.ps1` in an editor rather than r
 hands off to `Start-PSTSM.ps1`, which sorts out the STA apartment WinForms requires — `pwsh`
 starts MTA, where a form either throws or deadlocks on its first dialog.
 
-### Elevation is a property of the task, not of opening the tool
+### Elevation belongs to the task, not to opening the tool
 
-PSTSM starts unelevated, like Task Scheduler itself. A standard user can already register a task
-that runs as themselves, and demanding a UAC prompt up front would lock out exactly the people
-managing their own work.
+PSTSM opens unelevated and stays that way until something actually needs otherwise. Most work
+never does, and demanding a prompt up front would lock out exactly the people managing their own
+scheduled work.
 
-Microsoft's [Security Contexts for Tasks](https://learn.microsoft.com/windows/win32/taskschd/security-contexts-for-running-tasks#user-account-control-uac-security-for-tasks)
-draws the line precisely:
+Only a short list of registrations needs an administrator token:
 
 | | Needs admin? |
 |---|---|
 | Register / edit / delete a task that runs as **you** at normal privilege | no |
-| Browse, edit, health sweep, run logs — everything read-only | no |
+| Browse, edit, health sweep, run logs — the whole read-only surface | no |
 | **Run with highest privileges** | **yes** |
 | Run as **SYSTEM / LOCAL SERVICE / NETWORK SERVICE** | **yes** |
 | Run for a **group** | **yes** |
+| An **at-startup** trigger | **yes** |
 | `Install-ADServiceAccount`, granting the batch-logon right | **yes** |
 
-Windows *rejects* those registrations outright rather than silently downgrading them, so the
-preflight raises `NEEDS_ELEVATION` as a blocking error the moment a plan asks for one without
-the rights — and the main window grows a **Restart as admin** button. You escalate when the work
-needs it, not before.
+Windows *refuses* those outright rather than quietly downgrading them, so when a plan asks for one
+the **Save** button takes a shield and elevates for that single registration — one consent prompt,
+no restart, and everything you typed is still there afterwards. Decline the prompt and nothing
+happens at all; the window is exactly as you left it.
 
-`PSTSM.cmd -Elevated` asks up front if you'd rather.
+That mechanism is Microsoft's [Administrator Broker Model](https://learn.microsoft.com/windows/win32/secauthz/developing-applications-that-require-administrator-privilege):
+a short-lived elevated helper does the one privileged thing and exits. It works that way because
+Windows cannot raise the privileges of a process that is already running — elevation happens at
+process creation and nowhere else, so "elevate on save" has to mean "start something elevated that
+saves". What crosses the boundary is a plan file that carries no secret, and a reply file; both
+live in a private temp directory that is deleted afterwards. A stored-password task is the one case
+needing a credential, and the helper prompts for it itself, so the password only ever exists inside
+the elevated process that consumes it.
 
-One thing worth knowing when you do elevate: it keeps you as **you** with an administrator token,
-but if your own account isn't an administrator, UAC asks for one that is and Windows then runs
-the tool as *that* account — which changes whose tasks you see and who new ones are attributed
-to. That's Windows' behaviour, not a choice this tool makes, but it explains a list that suddenly
-looks different.
+If you would rather elevate once and not be asked again — installing a gMSA, granting batch-logon
+rights, working through a run of privileged tasks — **Restart as admin** sits in the footer, and
+`PSTSM.cmd -Elevated` does it from the start.
+
+<details>
+<summary>Why Task Scheduler looks like it does this differently</summary>
+
+Open `taskschd.msc`, tick **Run with highest privileges**, save, and it asks for a username and
+password — which looks like elevation happening at the point of the action. It isn't, twice over.
+
+`mmc.exe` ships with `requestedExecutionLevel level="highestAvailable"`, so when an administrator
+opens Task Scheduler **Windows elevates it at launch** — silently, with no prompt, because it is a
+signed Windows binary. It is already elevated before you tick anything.
+
+The dialog at save time is asking for the *task's* run-as account password, so the service can
+store it as an LSA secret and log the task on later. It is triggered by "Run whether user is logged
+on or not" without "Do not store password", not by the privileges checkbox. Microsoft keeps the two
+strictly separate: *"the user must supply the correct credentials when a task is registered **and**
+the application must be running in a process with the correct privileges."* Two conditions, both
+required — credentials never substitute for privilege.
+
+PSTSM doesn't take MMC's route because silently elevating an administrator on launch is the very
+thing that makes a tool unusable for everyone else, and it grants far more privilege than one
+registration needs.
+
+</details>
 
 **Main window** — every scheduled task, defaulting to the PowerShell ones and hiding the
 built-in `\Microsoft\` tree (both are toggles). Unlike the built-in console it shows the actual

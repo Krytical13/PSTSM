@@ -27,6 +27,11 @@ function Test-PSTSMPlan {
         Whether the current session holds an administrator token. Defaults to the real answer;
         it is a parameter so the elevation rules can be tested from either side without having
         to run the suite twice under different tokens.
+    .PARAMETER CanElevate
+        The caller is able to elevate on demand - it will hand the plan to an elevated helper
+        rather than register it here. Downgrades NEEDS_ELEVATION from a blocking error to
+        information, because with this set the operator has nothing to fix. The UI passes it;
+        anything registering in-process must not.
     .OUTPUTS
         [pscustomobject] Id, Severity, Title, Detail, Recommendation
     .EXAMPLE
@@ -43,7 +48,9 @@ function Test-PSTSMPlan {
 
         [bool]$IsElevated = (New-Object Security.Principal.WindowsPrincipal(
                 [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
-            [Security.Principal.WindowsBuiltInRole]::Administrator)
+            [Security.Principal.WindowsBuiltInRole]::Administrator),
+
+        [switch]$CanElevate
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -249,20 +256,32 @@ function Test-PSTSMPlan {
     }
 
     # --- can THIS session register what is being asked for? ------------------------------
-    # Microsoft's rule (Security Contexts for Tasks): from a low-privilege process you cannot
-    # register a task with RunLevel HIGHEST, nor as Local System, Builtin\Administrator or a
-    # group. Everything else - a task that runs as you at normal privilege - registers fine
-    # without elevation, which is why PSTSM does not demand a UAC prompt just to open.
+    # Verified rather than assumed: with a genuine UAC-filtered token (TokenElevationType=3,
+    # TokenIsElevated=0) RunLevel=Limited registers and RunLevel=Highest returns "Access is
+    # denied". Windows refuses outright instead of quietly downgrading, so this has to be caught
+    # before the operator waits on a save that cannot succeed.
+    #
+    # Everything off that list - a task that runs as you at normal privilege, plus the entire
+    # read-only surface - needs no elevation, which is why PSTSM does not ask for a UAC prompt
+    # merely to open.
     if (-not $IsElevated) {
-        $needsAdmin = @()
-        if ($Plan.Principal.RunLevel -eq 'Highest') { $needsAdmin += 'it runs with highest privileges' }
-        if ($Plan.Principal.LogonType -eq 'ServiceAccount') { $needsAdmin += "it runs as $($Plan.Principal.UserId)" }
-        if ($Plan.Principal.LogonType -eq 'Group') { $needsAdmin += 'it runs for a group' }
+        $needsAdmin = @(Test-PSTSMPlanNeedsElevation -Plan $Plan)
 
         if ($needsAdmin.Count -gt 0) {
-            Add-PSTSMCheck 'NEEDS_ELEVATION' 'Error' 'This task needs administrator rights to register' `
-                ("PSTSM is not running elevated, and $($needsAdmin -join ', and ').") `
-                'Restart PSTSM as administrator, or change the account so the task runs as you at normal privilege. Windows rejects the registration outright rather than silently downgrading it.'
+            # Severity depends on whether the caller can actually do something about it. The UI
+            # can: it hands the plan to an elevated helper behind one consent prompt, so this is
+            # information, not a blocker. A script calling Register-PSTSMPlan directly has no
+            # such route, and a clear stop here beats a bare "Access is denied" from the service.
+            if ($CanElevate) {
+                Add-PSTSMCheck 'NEEDS_ELEVATION' 'Info' 'Saving this task will ask for administrator consent' `
+                    ("PSTSM is not running elevated, and $($needsAdmin -join ', and ').") `
+                    'Nothing to do - you will get one consent prompt when you save, and your work here is kept.'
+            }
+            else {
+                Add-PSTSMCheck 'NEEDS_ELEVATION' 'Error' 'This task needs administrator rights to register' `
+                    ("This session is not elevated, and $($needsAdmin -join ', and ').") `
+                    'Run this from an elevated session, or change the account so the task runs as you at normal privilege. Windows rejects the registration outright rather than silently downgrading it.'
+            }
         }
     }
 

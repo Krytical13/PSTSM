@@ -44,6 +44,9 @@ function New-PSTSMGmsa {
         New-PSTSMGmsa -Name 'svc_reports' -PrincipalsAllowedToRetrieveManagedPassword 'gg_ReportHosts'
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword',
+        'PrincipalsAllowedToRetrieveManagedPassword',
+        Justification = 'Not a password. This is the list of computer and group principals permitted to retrieve the managed password, and it is the name Set-ADServiceAccount uses; renaming it would only obscure the mapping to the directory attribute.')]
     param(
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]

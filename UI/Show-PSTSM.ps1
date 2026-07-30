@@ -77,11 +77,11 @@ function Show-PSTSM {
     $btnRefresh = New-PSTSMUIButton -Text 'Refresh'
 
     # Elevation is a property of what a task DOES, not of opening this window, so the tool runs
-    # unelevated like Task Scheduler does. This offers the upgrade only when it is not already
-    # held - most work never needs it.
-    $isElevated = (New-Object Security.Principal.WindowsPrincipal(
-            [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    # unelevated like Task Scheduler does. Saving a privileged task elevates for that one
+    # registration, so this is no longer the route to getting work done - it is here for the
+    # operator doing a run of privileged work who would rather not answer a prompt each time.
+    # Hence out of the toolbar and into the footer.
+    $isElevated = (Test-PSTSMElevated)
     $btnElevate = New-PSTSMUIButton -Text 'Restart as admin' -Width 140
 
     $toolbar = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -90,10 +90,6 @@ function Show-PSTSM {
     $toolbar.WrapContents = $true
     $toolbar.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
     $toolbarButtons = @($btnNew, $btnEdit, $btnRun, $btnLog, $btnHealth, $btnToggle, $btnDelete, $btnExport, $btnConsole, $btnRefresh)
-    # Omitted entirely rather than added-then-hidden. A hidden control is still measured by the
-    # layout, and Control.Visible reads false for everything on a form that has never been
-    # shown - so "hidden" is not something the offline layout checks can even see.
-    if (-not $isElevated) { $toolbarButtons += $btnElevate }
     foreach ($b in $toolbarButtons) { [void]$toolbar.Controls.Add($b) }
 
     # --- filter row ------------------------------------------------------------------
@@ -177,9 +173,24 @@ function Show-PSTSM {
     & $addColumn 'UserId' 'Run as' 90 $true
 
     # --- status ------------------------------------------------------------------------
+    # The status line and the session-elevation offer share the footer row: the offer is a quiet
+    # aside, not a call to action, because saving a privileged task no longer depends on it.
+    $footer = New-Object System.Windows.Forms.TableLayoutPanel
+    $footer.Dock = 'Fill'
+    $footer.AutoSize = $true
+    $footer.ColumnCount = 2
+    $footer.RowCount = 1
+    [void]$footer.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$footer.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+
     $lblStatus = New-PSTSMUILabel -Text '' -ForeColor $t.Muted
     $lblStatus.Dock = 'Fill'
     $lblStatus.Margin = New-Object System.Windows.Forms.Padding(3, 6, 3, 3)
+    $footer.Controls.Add($lblStatus, 0, 0)
+    # Omitted entirely rather than added-then-hidden. A hidden control is still measured by the
+    # layout, and Control.Visible reads false for everything on a form that has never been
+    # shown - so "hidden" is not something the offline layout checks can even see.
+    if (-not $isElevated) { $footer.Controls.Add($btnElevate, 1, 0) }
 
     # =================================================================================
     # Behaviour
@@ -453,7 +464,7 @@ function Show-PSTSM {
     $root.Controls.Add($toolbar, 0, 0)
     $root.Controls.Add($filterRow, 0, 1)
     $root.Controls.Add($grid, 0, 2)
-    $root.Controls.Add($lblStatus, 0, 3)
+    $root.Controls.Add($footer, 0, 3)
     [void]$form.Controls.Add($root)
 
     # Guarded on purpose. This is the only handler that fires without user interaction, so it
