@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 @{
     RootModule        = 'PSTSM.psm1'
-    ModuleVersion     = '0.3.0'
+    ModuleVersion     = '0.4.0'
     GUID              = 'c9e4a7f2-58b1-4d36-9a0e-7b2c15d8e034'
     Author            = 'Krytical13'
     CompanyName       = ''
@@ -84,6 +84,15 @@
             # Must stay a single constant expression. String concatenation with '+' here makes
             # the manifest a "dynamic expression" that Import-PowerShellDataFile refuses to read.
             ReleaseNotes = @'
+0.4.0 - Elevation moved to where the privilege is actually needed. The tool opens unelevated;
+saving a task that needs administrator rights elevates for that one registration behind a single
+consent prompt, keeping whatever is in the editor. Windows cannot raise a running process's
+privileges, so this uses Microsoft's Administrator Broker Model - a short-lived elevated helper.
+The boundary was measured rather than read: with a UAC-filtered token RunLevel=Highest, service
+accounts, group principals and at-startup triggers are refused, and everything else registers.
+Adds a health sweep, per-task run logs, and an Origin column separating Windows, app, and
+person-created tasks.
+
 0.3.0 - Tasks can run as a gMSA (LogonType Password with no password, which the plan models
 separately so the password rules do not apply). Adds a side utility that creates a gMSA and
 prepares the local machine, since that is six steps across the directory and the host. Clarifies

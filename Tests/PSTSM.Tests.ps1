@@ -1176,3 +1176,58 @@ Describe 'Invoke-PSTSMElevatedRegistration' {
         }
     }
 }
+
+Describe 'Release metadata' {
+    BeforeAll {
+        $script:ModuleRoot = Split-Path $PSScriptRoot -Parent
+        $script:Manifest = Import-PowerShellDataFile (Join-Path $script:ModuleRoot 'PSTSM.psd1')
+        $script:Readme = Get-Content -LiteralPath (Join-Path $script:ModuleRoot 'README.md') -Raw
+    }
+
+    It 'states the same version in the manifest and the README' {
+        # These drifted apart silently for two releases - the manifest said 0.3.0 while the
+        # README still advertised 0.2.0 - which is exactly the sort of thing nobody notices
+        # until it is on a public repository.
+        $script:Readme | Should -Match ([regex]::Escape("v$($script:Manifest.ModuleVersion)"))
+    }
+
+    It 'has a release note for the current version' {
+        $notes = $script:Manifest.PrivateData.PSData.ReleaseNotes
+        $notes | Should -Match ([regex]::Escape($script:Manifest.ModuleVersion) + '\s*-')
+    }
+
+    It 'exports every function the module defines, and defines every one it exports' {
+        $defined = @(Get-ChildItem (Join-Path $script:ModuleRoot 'Functions') -Recurse -Filter *.ps1 |
+                ForEach-Object {
+                    $errs = $null
+                    $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+                    $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) |
+                        ForEach-Object { $_.Name }
+                }) | Sort-Object -Unique
+
+        $exported = @($script:Manifest.FunctionsToExport) | Sort-Object -Unique
+        # UI functions live outside Functions\, so only check that nothing under Functions\ was
+        # forgotten - a function nobody can call is dead weight in a published module.
+        $missing = @($defined | Where-Object { $_ -notin $exported })
+        $missing | Should -BeNullOrEmpty -Because "these are defined but not exported: $($missing -join ', ')"
+    }
+
+    It 'carries an SPDX identifier in every script, matching the declared licence' {
+        $files = @(Get-ChildItem $script:ModuleRoot -Recurse -Filter *.ps1)
+        $without = @($files | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -notmatch 'SPDX-License-Identifier' })
+        $without | Should -BeNullOrEmpty -Because "these have no SPDX header: $($without.Name -join ', ')"
+
+        # One licence, stated the same way everywhere. Mixing -only and -or-later across files
+        # is a real ambiguity for anyone forking.
+        $ids = @($files | ForEach-Object {
+                if ((Get-Content -LiteralPath $_.FullName -Raw) -match 'SPDX-License-Identifier:\s*(\S+)') { $Matches[1] }
+            }) | Sort-Object -Unique
+        $ids | Should -HaveCount 1 -Because "found: $($ids -join ', ')"
+    }
+
+    It 'ships the elevation helper, which the module cannot save privileged tasks without' {
+        Test-Path -LiteralPath (Join-Path $script:ModuleRoot 'PSTSM.Elevate.ps1') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $script:ModuleRoot 'PSTSM.cmd') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $script:ModuleRoot 'LICENSE') | Should -BeTrue
+    }
+}

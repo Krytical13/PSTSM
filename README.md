@@ -5,7 +5,7 @@
 Build, validate, register and edit Windows scheduled tasks that run PowerShell scripts —
 with the launch boilerplate derived from the script instead of retyped every time.
 
-**Status: v0.2.0 — engine and UI both working.**
+**Status: v0.4.0 — engine and UI both working.**
 
 ## Why
 
