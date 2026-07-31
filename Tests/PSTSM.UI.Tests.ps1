@@ -725,3 +725,44 @@ Describe 'Apartment state' {
         $apartment | Should -BeIn @('STA', 'MTA')
     }
 }
+
+Describe 'Action bar accessibility' -Skip:(-not $script:IsSta) {
+    It 'gives the action bar a left-to-right tab order' {
+        # Asserted against a REAL dialog rather than by calling the internal builder, which is not
+        # exported. The right-hand group flows RightToLeft, so the LAST button added is visually
+        # leftmost - which put Cancel ahead of the primary in every dialog using this bar.
+        $f = Show-PSTSMEditor -BuildOnly
+        try {
+            Initialize-FormLayout -Form $f
+            $buttons = @(Get-AllControl -Root $f | Where-Object { $_ -is [System.Windows.Forms.Button] })
+            $cancel = @($buttons | Where-Object { $_.Text -eq 'Cancel' })[0]
+            $primary = @($buttons | Where-Object { $_.Text -in 'Create task', 'Save changes' })[0]
+            $cancel | Should -Not -BeNullOrEmpty
+            $primary | Should -Not -BeNullOrEmpty
+            # The primary sits to the LEFT of Cancel on screen, so it must be reached first.
+            $primary.Left | Should -BeLessThan $cancel.Left
+            $primary.TabIndex | Should -BeLessThan $cancel.TabIndex -Because 'tab order must follow the eye'
+        }
+        finally { if ($f) { $f.Dispose() } }
+    }
+
+    It 'hands the whole palette to the system under High Contrast' {
+        # A fixed palette is exactly wrong there: the user asked the OS for specific colours and
+        # every hardcoded value overrides one. The symptom was a task list of blank bands, where a
+        # fixed near-black cell foreground sat on the system window colour at about 1.02:1.
+        $src = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'UI/PSTSMUI.Common.ps1') -Raw
+        $src | Should -Match 'HighContrast'
+        $src | Should -Match 'SystemColors'
+    }
+
+    It 'never sets one half of a colour pair' {
+        # Setting only a BackColor leaves the foreground on the system default, which under High
+        # Contrast is light-on-light. Colour assignments come in pairs or not at all.
+        $ui = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'UI/PSTSMUI.Common.ps1') -Raw
+        $main = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'UI/Show-PSTSM.ps1') -Raw
+        # The read-only textbox and the grid's cell styles are the two that rendered invisibly.
+        $ui | Should -Match '\$tb\.ForeColor'
+        $main | Should -Match 'DefaultCellStyle\.ForeColor'
+        $main | Should -Match 'AlternatingRowsDefaultCellStyle\.ForeColor'
+    }
+}

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Get-PSTSMTaskOrigin {
     <#
     .SYNOPSIS
@@ -61,6 +61,20 @@ function Get-PSTSMTaskOrigin {
 
     if ($author -match '^[^\\]+\\[^\\]+$') {
         $leaf = ($author -split '\\')[-1]
+
+        # Resolve to a SID before falling back to the English string. "NT AUTHORITY" is LOCALISED -
+        # NT-AUTORITÄT on German Windows, AUTORITE NT on French - so a literal match classified
+        # every service-authored task on a non-English machine as Person. The well-known SIDs are
+        # the same everywhere: S-1-5-18/19/20 are SYSTEM, LOCAL SERVICE and NETWORK SERVICE, and
+        # S-1-5-80-* is a service account.
+        $sid = $null
+        try { $sid = (New-Object System.Security.Principal.NTAccount($author)).Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value }
+        catch { Write-Verbose "Could not resolve '$author' to a SID: $($_.Exception.Message)" }
+
+        if ($sid -and ($sid -in @('S-1-5-18', 'S-1-5-19', 'S-1-5-20') -or $sid -like 'S-1-5-80-*')) {
+            return [PSCustomObject]@{ Origin = 'App'; Detail = "Registered by a service account ($author) - an installer or service, not a person." }
+        }
         if ($author -match '^(?i)NT AUTHORITY\\') {
             return [PSCustomObject]@{ Origin = 'App'; Detail = "Registered by something running as $author - an installer or service, not a person." }
         }

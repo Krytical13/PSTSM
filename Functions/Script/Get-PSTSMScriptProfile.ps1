@@ -67,9 +67,20 @@ function Get-PSTSMScriptProfile {
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($resolved, [ref]$tokens, [ref]$parseErrors)
 
+    # A file the parser could not READ is not a file with syntax errors. ParseFile returns an
+    # empty AST plus a single FileReadError, and flattening that into the syntax-error list made
+    # the tool assert three things it had no basis for: "fix the syntax errors", "parameters the
+    # script does not declare", and "no exit code" - all about a file it never opened. Save was
+    # blocked with the wrong reason, which sends the operator to edit a script that is fine.
+    $readError = @($parseErrors | Where-Object { $_.ErrorId -eq 'FileReadError' })
+    $isReadable = ($readError.Count -eq 0)
+
     $errorMessages = @()
-    if ($parseErrors) {
+    if ($parseErrors -and $isReadable) {
         $errorMessages = @($parseErrors | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" })
+    }
+    elseif (-not $isReadable) {
+        $errorMessages = @($readError | ForEach-Object { $_.Message })
     }
 
     # --- #Requires --------------------------------------------------------------------
@@ -372,6 +383,10 @@ function Get-PSTSMScriptProfile {
         }
 
         ParseErrors       = $errorMessages
+        # $false when the file could not be READ at all - locked, denied, or gone. Everything
+        # derived below is then absent because nothing was parsed, not because the script lacks it,
+        # so Test-PSTSMPlan suppresses the checks that would otherwise invent defects.
+        IsReadable        = $isReadable
         IsParseable       = ($errorMessages.Count -eq 0)
     }
 

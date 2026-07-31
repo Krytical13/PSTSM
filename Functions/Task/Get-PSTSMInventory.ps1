@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function Get-PSTSMInventory {
     <#
     .SYNOPSIS
@@ -35,10 +35,28 @@ function Get-PSTSMInventory {
         [switch]$IncludeMicrosoft
     )
 
-    $getParams = @{ ErrorAction = 'SilentlyContinue' }
+    # -ErrorVariable, not -ErrorAction Stop. Stop would let ONE unreadable task empty the whole
+    # list, which is the failure a regression test already guards against. But swallowing the
+    # error entirely is how a stopped Task Scheduler service came back as "no tasks" - identical
+    # to a clean machine. Tolerant enumeration, visible failure.
+    $getParams = @{ ErrorAction = 'SilentlyContinue'; ErrorVariable = 'enumErrors' }
     if ($TaskPath) { $getParams['TaskPath'] = $TaskPath }
 
     $tasks = @(Get-ScheduledTask @getParams | Where-Object { $_.TaskName -like $TaskName })
+
+    # ObjectNotFound is excluded on purpose: asking for a folder that holds no tasks is a normal
+    # empty result, not a broken read, and treating it as failure made every narrowed filter shout.
+    # What must not stay silent is the other kind - a stopped Task Scheduler service, or a CIM
+    # failure - because that returned zero tasks and looked exactly like a clean machine.
+    $realErrors = @($enumErrors | Where-Object { $_.CategoryInfo.Category -ne 'ObjectNotFound' })
+
+    if ($realErrors.Count -gt 0 -and $tasks.Count -eq 0) {
+        Write-Error ("Could not read scheduled tasks: $($realErrors[0].Exception.Message) " +
+            'If the Task Scheduler service is stopped, start it and refresh.') -ErrorAction Continue
+    }
+    elseif ($realErrors.Count -gt 0) {
+        Write-Warning "$($realErrors.Count) task(s) could not be read and are missing from this list: $($realErrors[0].Exception.Message)"
+    }
 
     if (-not $IncludeMicrosoft) {
         $tasks = @($tasks | Where-Object { $_.TaskPath -notlike '\Microsoft\*' })
@@ -189,7 +207,7 @@ function ConvertFrom-PSTSMTriggerSummary {
         $class = $t.CimClass.CimClassName
         $start = $null
         if ($t.StartBoundary) {
-            try { $start = ([datetime]::Parse($t.StartBoundary)).ToString('HH:mm') }
+            try { $start = ([datetime]::Parse($t.StartBoundary)).ToString('HH:mm', [cultureinfo]::InvariantCulture) }
             catch { Write-Verbose "Unparseable StartBoundary '$($t.StartBoundary)'" }
         }
 

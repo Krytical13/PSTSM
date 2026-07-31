@@ -788,9 +788,9 @@ function Show-PSTSMEditor {
         else {
             foreach ($spec in $state.Triggers) {
                 $desc = switch ($spec.Type) {
-                    'Daily' { "Daily at $(([datetime]$spec.At).ToString('HH:mm'))" + $(if ($spec.DaysInterval -gt 1) { " every $($spec.DaysInterval) days" } else { '' }) }
-                    'Weekly' { "Weekly $($spec.DaysOfWeek -join ',') at $(([datetime]$spec.At).ToString('HH:mm'))" }
-                    'Once' { "Once on $(([datetime]$spec.At).ToString('yyyy-MM-dd HH:mm'))" }
+                    'Daily' { "Daily at $(([datetime]$spec.At).ToString('HH:mm', [cultureinfo]::InvariantCulture))" + $(if ($spec.DaysInterval -gt 1) { " every $($spec.DaysInterval) days" } else { '' }) }
+                    'Weekly' { "Weekly $($spec.DaysOfWeek -join ',') at $(([datetime]$spec.At).ToString('HH:mm', [cultureinfo]::InvariantCulture))" }
+                    'Once' { "Once on $(([datetime]$spec.At).ToString('yyyy-MM-dd HH:mm', [cultureinfo]::InvariantCulture))" }
                     'AtStartup' { 'At system startup' }
                     'AtLogOn' { if ($spec.UserId) { "At logon of $($spec.UserId)" } else { 'At any user logon' } }
                     'OnIdle' { 'When the computer is idle' }

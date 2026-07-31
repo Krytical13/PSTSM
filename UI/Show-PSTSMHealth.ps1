@@ -30,7 +30,7 @@ function Show-PSTSMHealth {
 
     Initialize-PSTSMUIHost
     $t = Get-PSTSMUITheme
-    $dlg = @{ OpenTask = $null; Findings = @() }
+    $dlg = @{ OpenTask = $null; Findings = @(); Checked = 0 }
 
     $form = New-PSTSMUIForm -Title 'PSTSM - Task health' -Width 1000 -Height 640
     $form.MinimumSize = New-Object System.Drawing.Size(0, 0)
@@ -85,7 +85,9 @@ function Show-PSTSMHealth {
         try {
             $p = @{ PowerShellOnly = $chkPsOnly.Checked }
             if ($chkMs.Checked) { $p['IncludeMicrosoft'] = $true }
-            $dlg.Findings = @(Test-PSTSMHealth @p -ErrorAction SilentlyContinue)
+            $checked = 0
+            $dlg.Findings = @(Test-PSTSMHealth @p -CheckedCount ([ref]$checked) -ErrorAction SilentlyContinue)
+            $dlg.Checked = $checked
 
             $ordered = $dlg.Findings | Sort-Object `
             @{ Expression = { (Get-PSTSMUISeverityStyle -Severity $_.Severity).Rank } },
@@ -105,8 +107,19 @@ function Show-PSTSMHealth {
             $warns = @($dlg.Findings | Where-Object Severity -eq 'Warning').Count
             $tasks = @($dlg.Findings | Group-Object FullName).Count
 
-            if ($dlg.Findings.Count -eq 0) {
-                $lblSummary.Text = 'Nothing wrong found'
+            # Branch on COVERAGE first, then on findings. "Nothing wrong found" in green after
+            # checking zero tasks is indistinguishable from a clean machine, and the default view
+            # filters to PowerShell tasks outside \Microsoft\ - so a machine with real problems can
+            # produce an all-clear simply because the sweep matched nothing.
+            if ($dlg.Checked -eq 0) {
+                $lblSummary.Text = 'No tasks to check'
+                $lblSummary.ForeColor = $t.Warn
+                $txtDetail.Text = 'The sweep matched no tasks, so this is not an all-clear. ' +
+                'Widen the filters in the main window - "PowerShell tasks only" and the built-in ' +
+                'Microsoft tree are both excluded by default - and run it again.'
+            }
+            elseif ($dlg.Findings.Count -eq 0) {
+                $lblSummary.Text = "Nothing wrong found in $($dlg.Checked) task$(if ($dlg.Checked -ne 1) { 's' })"
                 $lblSummary.ForeColor = $t.Good
                 $txtDetail.Text = 'Every task checked has a script that exists, a schedule that can still fire, and a last run that did not fail.'
             }
@@ -127,6 +140,10 @@ function Show-PSTSMHealth {
     }
 
     $lv.add_SelectedIndexChanged({
+            # Gate the primary on selection. A lit accent-filled button whose handler returns
+            # immediately is worse than a disabled one: the operator presses it, nothing happens,
+            # and there is no way to tell a broken tool from a wrong click.
+            $btnOpen.Enabled = ($lv.SelectedItems.Count -gt 0)
             if ($lv.SelectedItems.Count -eq 0) { return }
             $f = $lv.SelectedItems[0].Tag
             $lines = @("$($f.Severity.ToUpperInvariant()): $($f.Title)", '', "Task:   $($f.FullName)", "Origin: $($f.Origin)")
@@ -147,6 +164,10 @@ function Show-PSTSMHealth {
 
     $btnRescan = New-PSTSMUIButton -Text 'Re-scan' -Width 96
     $btnOpen = New-PSTSMUIButton -Text 'Open task' -Primary -Width 110
+    # Nothing is selected when the window opens.
+    $btnOpen.Enabled = $false
+    $lv.AccessibleName = 'Health findings'
+    $lv.AccessibleDescription = 'One row per problem found. Select a row to read the detail and recommendation below.'
     $btnClose = New-PSTSMUIButton -Text 'Close'
     $btnRescan.add_Click({ & $scan })
     $btnOpen.add_Click({

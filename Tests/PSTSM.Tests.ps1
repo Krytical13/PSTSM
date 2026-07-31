@@ -2012,3 +2012,148 @@ Describe 'Regressions from the second review pass' {
     }
 }
 
+
+Describe 'Second review pass - remaining findings' {
+    BeforeAll { $script:Root2 = Split-Path $PSScriptRoot -Parent }
+
+    Context 'A file that could not be read is not a file with errors' {
+        It 'reports a locked file as unreadable, not as three invented defects' {
+            # A genuinely unreadable file, produced by holding an exclusive lock - no ACL games,
+            # and it reproduces the real FileReadError that ParseFile returns. That error used to
+            # be folded into the syntax-error list, so the tool asserted "fix the syntax errors",
+            # "parameters the script does not declare" and "no exit code" about a file it had
+            # never opened, and blocked Save with the wrong reason.
+            $locked = Join-Path $TestDrive 'locked.ps1'
+            'param([string]$Real) exit 0' | Set-Content -LiteralPath $locked -Encoding UTF8
+            $stream = [System.IO.File]::Open($locked, 'Open', 'Read', 'None')
+            try {
+                $prof = Get-PSTSMScriptProfile -Path $locked
+                $prof.IsReadable | Should -BeFalse -Because 'the parser could not read it'
+                $prof.ParseErrors | Should -Not -BeNullOrEmpty
+
+                $plan = New-PSTSMPlan -ScriptPath $script:QuietScript
+                $plan.ScriptPath = $locked
+                $r = @(Test-PSTSMPlan -Plan $plan -ScriptProfile $prof -SkipExistingTaskCheck)
+                ($r | Where-Object Id -eq 'SCRIPT_UNREADABLE').Severity | Should -Be 'Error'
+                @($r | Where-Object Id -eq 'SCRIPT_PARSE') | Should -HaveCount 0 -Because 'it is not a syntax problem'
+                @($r | Where-Object Id -eq 'EXIT_CODE') | Should -HaveCount 0 -Because '"no exit statement" is true of every unread file'
+            }
+            finally { $stream.Dispose() }
+        }
+
+        It 'still reports a genuine syntax error as one' {
+            $bad = Join-Path $TestDrive 'broken.ps1'
+            'param(' | Set-Content -LiteralPath $bad -Encoding UTF8
+            $plan = New-PSTSMPlan -ScriptPath $script:QuietScript
+            $plan.ScriptPath = $bad
+            $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+            ($r | Where-Object Id -eq 'SCRIPT_PARSE').Severity | Should -Be 'Error'
+            @($r | Where-Object Id -eq 'SCRIPT_UNREADABLE') | Should -HaveCount 0
+        }
+    }
+
+    Context 'Transcript logging cannot fail in silence' {
+        It 'warns when the log directory is not usable' {
+            # The wrapper deliberately lets the task run when Start-Transcript fails, so the exit
+            # code stays truthful - which means a broken log path produces no signal anywhere at
+            # run time. Preflight is the only place to say it.
+            $plan = New-PSTSMPlan -ScriptPath $script:QuietScript
+            $plan.Logging.Mode = 'Transcript'
+            $plan.Logging.Directory = 'Z:\no-such-volume\logs'
+            $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+            @($r | Where-Object Id -eq 'LOG_DIR') | Should -Not -BeNullOrEmpty
+        }
+
+        It 'flags a UNC log path, which an S4U task cannot reach' {
+            $plan = New-PSTSMPlan -ScriptPath $script:QuietScript
+            $plan.Logging.Mode = 'Transcript'
+            $plan.Logging.Directory = '\\server\share\logs'
+            $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+            @($r | Where-Object Id -in 'LOG_DIR', 'LOG_DIR_UNC') | Should -Not -BeNullOrEmpty
+        }
+
+        It 'blocks a wrapper path that would exceed MAX_PATH' {
+            # Fails at Save naming a directory that visibly exists - and on PowerShell 7 it
+            # SUCCEEDS and the task then fails on every run.
+            $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -TaskName ('L' * 240)
+            $plan.Logging.Mode = 'Transcript'
+            $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+            ($r | Where-Object Id -eq 'LOG_WRAPPER_PATH').Severity | Should -Be 'Error'
+        }
+    }
+
+    Context 'Generated wrapper substitution' {
+        It 'does not substitute into its own output' {
+            # Chained .Replace calls let each replacement rewrite the previous one's output: a task
+            # named "Has__RETENTION__Inside" came out as "Has30Inside" and failed every run.
+            $d = Join-Path $TestDrive 'sub'
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $d 'demo.ps1') -Value 'exit 0' -Encoding UTF8
+            $plan = New-PSTSMPlan -ScriptPath (Join-Path $d 'demo.ps1') -TaskName 'Has__RETENTION__Inside'
+            $plan.Logging.Mode = 'Transcript'
+            $text = Get-Content -LiteralPath (New-PSTSMLogWrapper -Plan $plan) -Raw
+            $text | Should -Not -Match 'Has30Inside'
+            $text | Should -Match ([regex]::Escape('Has__RETENTION__Inside'))
+        }
+    }
+
+    Context 'Default-value resolution declines what it cannot do honestly' {
+        It 'refuses a numeric + instead of pasting the digits together' {
+            # [int]$Port = 8000 + 80 was shown in the cue banner as 800080. The resolver
+            # stringifies both operands, so '+' silently meant concatenation for numbers too.
+            (Resolve-PSTSMDefaultValue -Expression '8000 + 80').Kind | Should -Not -Be 'Resolved'
+            (Resolve-PSTSMDefaultValue -Expression '1 + 2').Kind | Should -Not -Be 'Resolved'
+        }
+        It 'still resolves genuine string concatenation' {
+            $r = Resolve-PSTSMDefaultValue -Expression "'a' + 'b'"
+            $r.Kind | Should -Be 'Resolved'
+            $r.Value | Should -Be 'ab'
+        }
+    }
+
+    Context 'Health reports coverage, not just findings' {
+        It 'returns how many tasks it swept' {
+            # "Nothing wrong found" in green after checking ZERO tasks is byte-identical to a clean
+            # machine, and the default view excludes non-PowerShell and \Microsoft\ tasks - so a
+            # machine with real problems could produce an all-clear.
+            $checked = -1
+            $null = Test-PSTSMHealth -TaskPath '\NoSuchFolderAnywhere\' -CheckedCount ([ref]$checked) -ErrorAction SilentlyContinue
+            $checked | Should -Be 0 -Because 'the caller must be able to tell "clean" from "nothing looked at"'
+        }
+    }
+
+    Context 'Non-English Windows' {
+        It 'classifies a service-account author by SID, not by an English string' {
+            # "NT AUTHORITY" is localised - NT-AUTORITAT on German Windows - so a literal match
+            # classified every service-authored task as Person there.
+            $src = Get-Content -LiteralPath (Join-Path $script:Root2 'Functions/Task/Get-PSTSMTaskOrigin.ps1') -Raw
+            $src | Should -Match 'S-1-5-18'
+            $src | Should -Match 'SecurityIdentifier'
+        }
+
+        It 'formats every displayed date invariantly' {
+            # An ISO-shaped slot filled with a Hijri or Buddhist year reads as a plausible-but-
+            # wrong Gregorian date in Last run / Next run / the run log.
+            $offenders = @()
+            foreach ($f in Get-ChildItem $script:Root2 -Recurse -Filter *.ps1) {
+                if ($f.FullName -like '*\Tests\*') { continue }
+                $n = 0
+                foreach ($line in (Get-Content -LiteralPath $f.FullName)) {
+                    $n++
+                    if ($line -match "ToString\('[^']*(yyyy|HH:mm)[^']*'\)") { $offenders += "$($f.Name):$n" }
+                }
+            }
+            $offenders | Should -BeNullOrEmpty -Because "these format a date without pinning the culture: $($offenders -join ', ')"
+        }
+    }
+
+    Context 'Accessibility' {
+
+        It 'hands the whole palette to the system under High Contrast' {
+            $src = Get-Content -LiteralPath (Join-Path $script:Root2 'UI/PSTSMUI.Common.ps1') -Raw
+            $src | Should -Match 'HighContrast'
+            $src | Should -Match 'SystemColors'
+        }
+    }
+}
+

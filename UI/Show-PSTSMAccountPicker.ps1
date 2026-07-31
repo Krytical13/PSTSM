@@ -88,7 +88,9 @@ function Show-PSTSMAccountPicker {
 
     $lblDetail = New-PSTSMUILabel -Text '' -ForeColor $t.Muted
     $lblDetail.Dock = 'Top'
-    $lblDetail.MaximumSize = New-Object System.Drawing.Size(760, 0)
+    # Scaled like its neighbours. Missed by the DPI retrofit, so the caption wrapped early at
+    # 150% and 200% while everything around it grew.
+    $lblDetail.MaximumSize = New-Object System.Drawing.Size([int](760 * (Get-PSTSMUIScale)), 0)
     $lblDetail.Margin = New-Object System.Windows.Forms.Padding(3, 8, 3, 4)
 
     # --- behaviour ------------------------------------------------------------------------------

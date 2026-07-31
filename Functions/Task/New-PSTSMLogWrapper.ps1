@@ -123,11 +123,19 @@ exit $exitCode
     # "O'Brien Report" produced a wrapper that failed to parse, so the task registered happily and
     # then failed on every single run with a bare parse error and no transcript to explain it.
     # $safeName itself stays undoubled - it is also the wrapper's filename.
-    $content = $template.
-    Replace('__SCRIPT_PATH__', ($Plan.ScriptPath -replace "'", "''")).
-    Replace('__LOG_DIR__', ($logDir -replace "'", "''")).
-    Replace('__TASK_NAME__', ($safeName -replace "'", "''")).
-    Replace('__RETENTION__', $retention.ToString())
+    # ONE pass with a map, not a chain of .Replace calls. Chained, each replacement can substitute
+    # into the output of the previous one: a task named "Has__RETENTION__Inside" came out as
+    # "Has30Inside" and the task then failed on every run. The trigger is absurd, but the previous
+    # ordering was only accidentally safe, and a single pass costs nothing.
+    $map = @{
+        '__SCRIPT_PATH__' = ($Plan.ScriptPath -replace "'", "''")
+        '__LOG_DIR__'     = ($logDir -replace "'", "''")
+        '__TASK_NAME__'   = ($safeName -replace "'", "''")
+        '__RETENTION__'   = $retention.ToString()
+    }
+    $content = [regex]::Replace($template, '__(?:SCRIPT_PATH|LOG_DIR|TASK_NAME|RETENTION)__', {
+            param($m) $map[$m.Value]
+        })
 
     if ($PSCmdlet.ShouldProcess($wrapperPath, 'Write task log wrapper')) {
         if (-not (Test-Path -LiteralPath $wrapperDir)) {

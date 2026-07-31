@@ -122,6 +122,9 @@ function Show-PSTSM {
 
     # --- grid -------------------------------------------------------------------------
     $grid = New-Object System.Windows.Forms.DataGridView
+    # Without this a screen reader announces the control type, not what it holds.
+    $grid.AccessibleName = 'Scheduled tasks'
+    $grid.AccessibleDescription = 'One row per scheduled task. Columns include the script it runs, its schedule, and the decoded result of its last run.'
     $grid.Dock = 'Fill'
     $grid.ReadOnly = $true
     $grid.AllowUserToAddRows = $false
@@ -137,7 +140,13 @@ function Show-PSTSM {
     $grid.ColumnHeadersDefaultCellStyle.BackColor = $t.SurfaceAlt
     $grid.ColumnHeadersDefaultCellStyle.ForeColor = $t.Text
     $grid.ColumnHeadersDefaultCellStyle.Font = $t.FontBold
+    # Paired. Setting only the alternating BACKground left normal rows drawing a themed foreground
+    # over the system window colour - about 1.02:1 under High Contrast Black, so every other row
+    # was blank while the alternating ones read fine.
+    $grid.DefaultCellStyle.BackColor = $t.Surface
+    $grid.DefaultCellStyle.ForeColor = $t.Text
     $grid.AlternatingRowsDefaultCellStyle.BackColor = $t.SurfaceAlt
+    $grid.AlternatingRowsDefaultCellStyle.ForeColor = $t.Text
 
     # Row and header heights do not follow the font, so at 125%/150% scaling the default 22px
     # row clips the text it contains. Derive them from the font actually in use.
@@ -236,9 +245,9 @@ function Show-PSTSM {
         $grid.Rows.Clear()
         foreach ($r in $rows) {
             $lastRun = ''
-            if ($r.LastRunTime -and $r.LastRunTime.Year -gt 1900) { $lastRun = $r.LastRunTime.ToString('yyyy-MM-dd HH:mm') }
+            if ($r.LastRunTime -and $r.LastRunTime.Year -gt 1900) { $lastRun = $r.LastRunTime.ToString('yyyy-MM-dd HH:mm', [cultureinfo]::InvariantCulture) }
             $nextRun = ''
-            if ($r.NextRunTime -and $r.NextRunTime.Year -gt 1900) { $nextRun = $r.NextRunTime.ToString('yyyy-MM-dd HH:mm') }
+            if ($r.NextRunTime -and $r.NextRunTime.Year -gt 1900) { $nextRun = $r.NextRunTime.ToString('yyyy-MM-dd HH:mm', [cultureinfo]::InvariantCulture) }
 
             $result = [string]$r.LastResultText
             if ($result.Length -gt 60) { $result = $result.Substring(0, 57) + '...' }

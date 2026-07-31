@@ -142,6 +142,14 @@ function Resolve-PSTSMDefaultValue {
             $l = & $resolve $node.Left
             $r = & $resolve $node.Right
             if (-not $l.Ok -or -not $r.Ok) { return @{ Ok = $false } }
+            # Only STRING concatenation. The line below stringifies both operands, so a numeric
+            # '+' was resolved by pasting the digits together: [int]$Port = 8000 + 80 was shown to
+            # the operator as 800080. Every other operator already declines; this one silently
+            # produced a plausible wrong number in the cue banner beside the field.
+            #
+            # Declining is right rather than evaluating: this resolver never executes anything, and
+            # a script that computes a default should keep computing it at run time.
+            if ($l.Value -is [ValueType] -or $r.Value -is [ValueType]) { return @{ Ok = $false } }
             return @{ Ok = $true; Value = ("$($l.Value)" + "$($r.Value)"); Literal = $false }
         }
 

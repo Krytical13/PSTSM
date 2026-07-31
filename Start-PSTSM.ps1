@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 
 <#
 .SYNOPSIS
@@ -27,7 +27,7 @@
     right - where per-save prompts would just be a nuisance.
 
     The apartment still has to be sorted before a window can open: WinForms requires STA, and
-    while powershell.exe has defaulted to STA since v3, pwsh starts MTA, where showing a form
+    while powershell.exe has defaulted to STA since v3, some hosts start MTA, where showing a form
     either throws or deadlocks on the first dialog. That and any requested elevation are handled
     in a SINGLE relaunch rather than bouncing the process twice.
 

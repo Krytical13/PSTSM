@@ -119,11 +119,37 @@ function Get-PSTSMUITheme {
 
         Severity is never communicated by colour alone; the preflight list carries an explicit
         ERROR / WARN / INFO / OK token as well (SC 1.4.1).
+
+        Under Windows High Contrast the whole palette is handed back to the system. A fixed
+        palette is exactly wrong there: the user has asked the OS for specific colours, and every
+        hardcoded value overrides one of them. The visible symptom was a task list rendering as
+        blank bands - a fixed near-black cell foreground over the system window colour, about
+        1.02:1 - so half the rows were invisible while the alternating ones read fine.
     .OUTPUTS
         [hashtable]
     #>
     [CmdletBinding()]
     param()
+
+    if ([System.Windows.Forms.SystemInformation]::HighContrast) {
+        return @{
+            Accent      = [System.Drawing.SystemColors]::Highlight
+            AccentHover = [System.Drawing.SystemColors]::Highlight
+            Danger      = [System.Drawing.SystemColors]::WindowText
+            Warn        = [System.Drawing.SystemColors]::WindowText
+            Good        = [System.Drawing.SystemColors]::WindowText
+            Muted       = [System.Drawing.SystemColors]::GrayText
+            Border      = [System.Drawing.SystemColors]::WindowFrame
+            Surface     = [System.Drawing.SystemColors]::Window
+            SurfaceAlt  = [System.Drawing.SystemColors]::Control
+            Text        = [System.Drawing.SystemColors]::WindowText
+
+            FontBase    = New-Object System.Drawing.Font('Segoe UI', 9)
+            FontBold    = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+            FontHeader  = New-Object System.Drawing.Font('Segoe UI Semibold', 10.5, [System.Drawing.FontStyle]::Bold)
+            FontMono    = New-Object System.Drawing.Font('Consolas', 9)
+        }
+    }
 
     @{
         Accent      = [System.Drawing.Color]::FromArgb(0x01, 0x65, 0x95)
@@ -427,7 +453,11 @@ function New-PSTSMUITextBox {
     }
     if ($ReadOnly) {
         $tb.ReadOnly = $true
+        # Both, always. Setting only the background leaves the foreground on the system default,
+        # which under High Contrast is light-on-light and unreadable. Colour assignments have to
+        # come in pairs or not at all.
         $tb.BackColor = $t.SurfaceAlt
+        $tb.ForeColor = $t.Text
     }
     $tb
 }
@@ -479,6 +509,13 @@ function New-PSTSMUIActionBar {
     $right.WrapContents = $false
     $right.AutoSize = $true
     foreach ($b in $RightButton) { if ($b) { [void]$right.Controls.Add($b) } }
+
+    # Tab order must follow the eye, not the add order. $right flows RightToLeft, so the LAST
+    # button added is the visually leftmost - which left Cancel ahead of the primary in every
+    # dialog using this bar. Reindexing here fixes all of them at once and moves nothing on screen.
+    $n = 0
+    foreach ($b in $left.Controls) { $b.TabIndex = $n++ }
+    for ($i = $right.Controls.Count - 1; $i -ge 0; $i--) { $right.Controls[$i].TabIndex = $n++ }
 
     $bar.Controls.Add($left, 0, 0)
     $bar.Controls.Add($right, 1, 0)

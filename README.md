@@ -31,7 +31,7 @@ batch shim is the sanctioned way to get a double-click entry point, the same rea
 and `mvnw.cmd` exist. It sets nothing up and hides nothing: it locates Windows PowerShell, checks
 the module is intact, and hands off to `Start-PSTSM.ps1` with your arguments passed through.
 
-`Start-PSTSM.ps1` in turn sorts out the STA apartment WinForms requires — `pwsh` starts MTA,
+`Start-PSTSM.ps1` in turn sorts out the STA apartment WinForms requires — some hosts start MTA,
 where a form either throws or deadlocks on its first dialog. Import the module directly from an
 STA host and you can skip both.
 
@@ -143,6 +143,23 @@ Config-as-code:
 Export-PSTSMPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
 Import-PSTSMPlan -Path .\Plans\NightlyReport.task.json | Register-PSTSMPlan
 ```
+
+## What it writes next to your script
+
+Two things, both beside the `.ps1` the task runs, and both already in this repo's `.gitignore`:
+
+| Path | What | When |
+|---|---|---|
+| `<ScriptDir>\.pstsm\<TaskName>.wrapper.ps1` | Generated wrapper — starts a transcript, runs your script, returns its real exit code | Logging set to Transcript |
+| `<ScriptDir>\Logs\<TaskName>_<stamp>.log` | One transcript per run, pruned after 30 days | Every run of such a task |
+
+The wrapper is regenerated on every save, so it can never drift from the plan. Retention only ever
+deletes transcripts matching that task's own prefix — never anything else in the folder.
+
+If the log directory turns out not to be writable, the preflight says so before you save. It is
+worth heeding: at run time a transcript that cannot start is **deliberately** not fatal — the task
+still runs and still reports a truthful exit code — so a broken log path is otherwise completely
+silent.
 
 ## What gets derived from the script
 

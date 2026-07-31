@@ -76,7 +76,19 @@ function Test-PSTSMPlan {
         $ScriptProfile = Get-PSTSMScriptProfile -Path $Plan.ScriptPath -DefaultEngineId $Plan.EngineId
     }
 
-    if (-not $ScriptProfile.IsParseable) {
+    # Unreadable and unparseable are different problems with different remedies, and conflating
+    # them sent the operator to fix syntax in a file that was never opened. An unreadable file also
+    # yields an empty AST, so PARAM_UNKNOWN and EXIT_CODE would fire on absences that are artefacts
+    # of not having read it - three invented defects from one real one.
+    $scriptUnreadable = ($ScriptProfile.PSObject.Properties['IsReadable'] -and -not $ScriptProfile.IsReadable)
+
+    if ($scriptUnreadable) {
+        Add-PSTSMCheck 'SCRIPT_UNREADABLE' 'Error' 'Script could not be read' `
+            ($ScriptProfile.ParseErrors -join '; ') `
+            ('Check permissions on the file and whether another process holds it. Nothing below is ' +
+            'derived from the script itself, because it was never opened.')
+    }
+    elseif (-not $ScriptProfile.IsParseable) {
         Add-PSTSMCheck 'SCRIPT_PARSE' 'Error' 'Script does not parse' `
             ($ScriptProfile.ParseErrors -join '; ') `
             'Fix the syntax errors; the task would fail immediately on every run.'
@@ -132,7 +144,9 @@ function Test-PSTSMPlan {
         'OutBuffer', 'PipelineVariable', 'WhatIf', 'Confirm')
 
     $unknown = @($planParamNames | Where-Object { $n = $_; -not ($knownNames | Where-Object { $_ -eq $n }) })
-    if ($unknown.Count -gt 0) {
+    # Suppressed when the file could not be read: every parameter looks undeclared when the
+    # declaration list is empty because nothing was parsed.
+    if ($unknown.Count -gt 0 -and -not $scriptUnreadable) {
         Add-PSTSMCheck 'PARAM_UNKNOWN' 'Warning' 'Parameters the script does not declare' `
             ($unknown -join ', ') `
             'Check for a typo. The script will fail to bind and exit before doing any work.'
@@ -318,7 +332,9 @@ function Test-PSTSMPlan {
     }
 
     # --- exit codes --------------------------------------------------------------------
-    if (-not $ScriptProfile.Signals.HasExitStatement) {
+    # Also suppressed for an unreadable file: "no exit statement found" is true of every file
+    # nobody looked in.
+    if (-not $ScriptProfile.Signals.HasExitStatement -and -not $scriptUnreadable) {
         Add-PSTSMCheck 'EXIT_CODE' 'Warning' 'Script never sets an exit code' `
             'No exit or throw statement found.' `
             "Task Scheduler will record 'Last Run Result: 0x0' whether the script worked or not, so a broken task looks healthy. Add an exit code, or leave logging on Transcript so there is something to read."
@@ -388,6 +404,64 @@ function Test-PSTSMPlan {
                 $detail += " - $shown"
             }
             Add-PSTSMCheck 'CONFIG_OK' 'Ok' "Settings file found for -$($cfg.ParameterName)" $detail $null
+        }
+    }
+
+    # --- transcript logging ------------------------------------------------------------
+    # Logging is the headline reliability feature, and when it fails it fails in silence: the
+    # wrapper deliberately lets the task run even if Start-Transcript cannot start, so the exit
+    # code stays truthful, the health sweep sees nothing wrong, and the run-log viewer reports
+    # "this task has never produced a log" - which reads as "it never ran". Checking here is the
+    # only place the operator can be told BEFORE that becomes their 3am mystery.
+    if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript' -and $Plan.Logging.Directory) {
+        $logDir = $Plan.Logging.Directory
+        $logProblem = $null
+        try {
+            if (-not (Test-Path -LiteralPath $logDir)) {
+                # Not created here - this function must not have side effects. Only tested.
+                $parent = Split-Path -Path $logDir -Parent
+                if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                    $logProblem = "neither it nor its parent '$parent' exists"
+                }
+            }
+            else {
+                $probe = Join-Path $logDir ('.pstsm_write_test_{0}' -f [guid]::NewGuid().ToString('N'))
+                try {
+                    [System.IO.File]::WriteAllText($probe, '')
+                    [System.IO.File]::Delete($probe)
+                }
+                catch { $logProblem = 'it exists but is not writable' }
+            }
+        }
+        catch { $logProblem = $_.Exception.Message }
+
+        if ($logProblem) {
+            Add-PSTSMCheck 'LOG_DIR' 'Warning' 'Transcript directory may not be usable' `
+                "$logDir - $logProblem." `
+                ('The task will still run, but with no transcript and no warning that there is none. ' +
+                'Point logging somewhere local and writable, or turn logging off so the absence is deliberate.')
+        }
+        elseif ($logDir -like '\\*') {
+            # Start-Transcript to a UNC path can report success and write nothing, which is the
+            # worst of both worlds - it defeats even a careful check at run time.
+            Add-PSTSMCheck 'LOG_DIR_UNC' 'Warning' 'Transcript directory is a UNC path' `
+                "$logDir is on the network." `
+                ('The task account must reach it - an S4U logon cannot, and Start-Transcript to an ' +
+                'unreachable share can report success and write nothing. Prefer a local path.')
+        }
+
+        # The wrapper's own path is scriptDir + taskName + ".wrapper.ps1" under .pstsm\. Past
+        # MAX_PATH this fails at Save with a message naming a directory that visibly exists, and
+        # on PowerShell 7 it SUCCEEDS and the task then fails every run.
+        if ($Plan.ScriptPath) {
+            $wrapperPath = Join-Path (Join-Path (Split-Path -Path $Plan.ScriptPath -Parent) '.pstsm') `
+            ("$($Plan.TaskName).wrapper.ps1")
+            if ($wrapperPath.Length -ge 260) {
+                Add-PSTSMCheck 'LOG_WRAPPER_PATH' 'Error' 'Generated wrapper path is too long' `
+                    "$($wrapperPath.Length) characters, and the limit is 260." `
+                    ('Shorten the task name - it is the part you control - or move the script somewhere ' +
+                    'less deeply nested. Turning logging off also avoids the wrapper entirely.')
+            }
         }
     }
 

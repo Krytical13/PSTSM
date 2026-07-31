@@ -41,7 +41,12 @@ function Test-PSTSMHealth {
     param(
         [string]$TaskPath,
         [bool]$PowerShellOnly = $true,
-        [switch]$IncludeMicrosoft
+        [switch]$IncludeMicrosoft,
+
+        # Receives how many tasks were actually swept. Without it the caller cannot tell "nothing
+        # is wrong" from "nothing was looked at", and those render identically - a green all-clear
+        # after checking zero tasks is the most misleading thing this window could say.
+        [ref]$CheckedCount
     )
 
     $invParams = @{ ErrorAction = 'SilentlyContinue' }
@@ -51,6 +56,7 @@ function Test-PSTSMHealth {
 
     $rows = @(Get-PSTSMInventory @invParams)
     Write-Verbose "Checking $($rows.Count) task(s)."
+    if ($PSBoundParameters.ContainsKey('CheckedCount')) { $CheckedCount.Value = $rows.Count }
 
     foreach ($row in $rows) {
         $findings = New-Object System.Collections.Generic.List[object]

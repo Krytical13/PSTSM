@@ -106,8 +106,8 @@ which S4U also cannot do.
 
 0.2.0 - Adds the WinForms front end: task list with live filtering, the create/edit window
 with a parameter form generated from the script's own param() block, a live command preview,
-inline preflight, and round-trip editing of existing tasks. Start-PSTSM.ps1 handles
-the STA relaunch pwsh needs.
+inline preflight, and round-trip editing of existing tasks. Start-PSTSM.ps1 relaunches into STA
+when the host is not already there.
 
 0.1.0 - Engine only. AST-derived script profile (engine, parameters, elevation, help,
 interactivity/network signals), verified argument quoting, plan model with reliability
