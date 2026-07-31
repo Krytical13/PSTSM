@@ -514,11 +514,19 @@ exit 0
             # The whole point of the guided flow: an admin who has never used gMSAs should
             # learn why this exists rather than be handed a command to paste.
             $checks = @(Test-PSTSMGmsaPrerequisite)
-            $kds = $checks | Where-Object Id -in 'GMSAPRE_NOKDSKEY', 'GMSAPRE_KDS_OK', 'GMSAPRE_KDS_PENDING', 'GMSAPRE_NODC'
+            # GMSAPRE_RSAT belongs in this set. Without the ActiveDirectory module the function
+            # returns early with exactly that, which is the correct answer - it cannot know
+            # anything about a KDS key it has no way to query. Omitting it made the test assume
+            # RSAT, and it failed on a CI runner that had none.
+            $kds = $checks | Where-Object Id -in 'GMSAPRE_NOKDSKEY', 'GMSAPRE_KDS_OK',
+            'GMSAPRE_KDS_PENDING', 'GMSAPRE_NODC', 'GMSAPRE_RSAT'
             $kds | Should -Not -BeNullOrEmpty
         }
 
         It 'refuses to guess a gMSA name that cannot fit in a sAMAccountName' {
+            # Offline validation: it must fire on a machine with no RSAT and no domain, because
+            # that is where the useful message matters most. It used to import ActiveDirectory
+            # first, so such a machine got "module not found" instead.
             { New-PSTSMGmsa -Name 'this_name_is_far_too_long' `
                     -PrincipalsAllowedToRetrieveManagedPassword 'grp' -WhatIf } |
                 Should -Throw '*cannot exceed 15 characters*'

@@ -69,10 +69,15 @@ function New-PSTSMGmsa {
     if (-not (Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
         throw 'The ActiveDirectory module is required to create a gMSA. Install RSAT AD PowerShell.'
     }
-    Import-Module ActiveDirectory -ErrorAction Stop
 
     $bare = $Name.TrimEnd('$')
 
+    # BEFORE the module import, not merely before the AD call. This is offline validation that
+    # needs nothing installed, and the help has always promised it happens first - but importing
+    # ActiveDirectory came earlier, so on a machine without RSAT a plainly bad name produced
+    # "module not found" instead of the error that would have fixed it. Caught by CI, on a runner
+    # that has no RSAT.
+    #
     # Checked here rather than left to AD, whose error for this is an opaque constraint
     # violation. The sAMAccountName is <name>$, and the limit applies to the whole thing.
     if ($bare.Length -gt 15) {
@@ -81,6 +86,8 @@ function New-PSTSMGmsa {
     if ($bare -match '[\\/:*?"<>|\[\]; +=,]') {
         throw "gMSA name '$bare' contains a character that is not valid in a sAMAccountName."
     }
+
+    Import-Module ActiveDirectory -ErrorAction Stop
 
     $domain = Get-ADDomain -ErrorAction Stop
 

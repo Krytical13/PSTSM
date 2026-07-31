@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Runs the test suites on every push and pull request.
 #
@@ -33,7 +33,10 @@ jobs:
           # Installed for AllUsers so BOTH hosts can see it. -Scope CurrentUser from pwsh lands in
           # Documents\PowerShell\, which Windows PowerShell does not read - the single most common
           # way "I installed Pester 5" fails to help.
-          Install-Module Pester -MinimumVersion 5.0 -Scope AllUsers -Force -SkipPublisherCheck
+          # Pinned to 5.x. -MinimumVersion 5.0 alone installs Pester 6, and the suites have never
+          # been validated against it - CI silently testing a different major version than every
+          # developer runs is worse than no CI.
+          Install-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99.99 -Scope AllUsers -Force -SkipPublisherCheck
           (Get-Module -ListAvailable Pester | Select-Object -First 1).Version.ToString()
 
       - name: Run tests
