@@ -256,7 +256,15 @@ function ConvertFrom-PSTSMCimTrigger {
 
     $at = $null
     if ($Trigger.StartBoundary) {
-        try { $at = ([datetime]::Parse($Trigger.StartBoundary)).ToString('yyyy-MM-ddTHH:mm:ss') }
+        # InvariantCulture on BOTH sides. This is the sibling of the writer in
+        # New-PSTSMTriggerSpec, and it was missed when that one was fixed - so opening an existing
+        # task on fi-FI or id-ID produced 07.00.00, and on ar-SA a Hijri year, while every reader
+        # parses invariantly. Fixing one end of a round trip and not the other is worse than
+        # fixing neither, because it turns a read into a silent rewrite.
+        try {
+            $at = ([datetime]::Parse($Trigger.StartBoundary, [cultureinfo]::InvariantCulture)).ToString(
+                'yyyy-MM-ddTHH:mm:ss', [cultureinfo]::InvariantCulture)
+        }
         catch { Write-Verbose "Unparseable StartBoundary '$($Trigger.StartBoundary)'" }
     }
 

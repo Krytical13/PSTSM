@@ -139,12 +139,31 @@ function ConvertTo-PSTSMArgument {
                 continue
             }
 
-            # --- arrays ---
+            # --- arrays: refused, because -File cannot carry one ---
+            # Measured, not assumed. Every candidate encoding was run against a real
+            # [string[]] parameter and all of them arrive wrong:
+            #
+            #   -Arr alpha,beta      -> ONE element, the literal string "alpha,beta"
+            #   -Arr alpha beta      -> ONE element "alpha"; "beta" binds positionally elsewhere
+            #   -Arr "alpha","beta"  -> ONE element, quotes included
+            #
+            # PowerShell only splits on commas when it PARSES a command line; under -File the
+            # arguments are handed over already tokenised, so nothing does the splitting.
+            #
+            # The old behaviour emitted the comma form: a command line that looks right, registers
+            # without complaint, and delivers a single wrong value on every run. Refusing is the
+            # only honest option - a silent 90% is worse than a loud stop.
             if ($value -is [array] -or ($value -is [System.Collections.IEnumerable] -and $value -isnot [string])) {
-                $items = @($value | Where-Object { $null -ne $_ } | ForEach-Object { ConvertTo-PSTSMQuotedValue -Value $_ })
+                $items = @($value | Where-Object { $null -ne $_ })
                 if ($items.Count -eq 0) { continue }
-                $parts.Add("-$key $($items -join ',')")
-                continue
+                if ($items.Count -eq 1) {
+                    # A one-element array is just a value; it survives -File intact.
+                    $parts.Add("-$key $(ConvertTo-PSTSMQuotedValue -Value $items[0])")
+                    continue
+                }
+                throw ("Parameter '$key' is an array of $($items.Count) values, and -File cannot deliver one: " +
+                    'PowerShell would hand the script a single string. Pass one value, or have the script ' +
+                    'read the list from a config file or split a delimited string itself.')
             }
 
             $parts.Add("-$key $(ConvertTo-PSTSMQuotedValue -Value $value)")
@@ -187,7 +206,12 @@ function ConvertTo-PSTSMQuotedValue {
 
     if ($null -eq $Value) { return '""' }
 
-    if ($Value -is [datetime]) { $text = $Value.ToString('yyyy-MM-ddTHH:mm:ss') }
+    # InvariantCulture, and not only for tidiness: PowerShell 7's ConvertFrom-Json turns an
+    # exported ISO-8601 parameter value back into a real DateTime, so a plan round-tripped through
+    # JSON reaches here as [datetime] and would be written onto the live command line as 07.00.00
+    # on fi-FI, or with a Hijri year on ar-SA. That is unbindable, and it breaks the portability
+    # the config-as-code path exists to provide.
+    if ($Value -is [datetime]) { $text = $Value.ToString('yyyy-MM-ddTHH:mm:ss', [cultureinfo]::InvariantCulture) }
     elseif ($Value -is [bool]) { $text = if ($Value) { '$true' } else { '$false' } }
     else { $text = [string]$Value }
 

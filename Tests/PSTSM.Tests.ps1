@@ -251,7 +251,6 @@ Describe 'ConvertTo-PSTSMArgument' {
                 TestMode   = $true
                 Skipped    = $false
                 Nothing    = $null
-                Days       = @('Mon', 'Tue')
             })
     }
 
@@ -284,8 +283,23 @@ Describe 'ConvertTo-PSTSMArgument' {
     It 'omits null values entirely' {
         $script:args1 | Should -Not -BeLike '*-Nothing*'
     }
-    It 'joins arrays with commas' {
-        $script:args1 | Should -BeLike '*-Days Mon,Tue*'
+    It 'refuses a multi-value array instead of emitting one -File cannot deliver' {
+        # This test used to assert the comma-joined form, pinning a bug in place. Measured against
+        # a real [string[]] parameter, every encoding arrives as ONE element:
+        #   -Days Mon,Tue      -> the single string "Mon,Tue"
+        #   -Days Mon Tue      -> "Mon" only
+        #   -Days "Mon","Tue"  -> one element, quotes included
+        # PowerShell splits on commas when it PARSES a command line; under -File the arguments are
+        # already tokenised, so nothing splits them. A command line that looks right and delivers
+        # the wrong value on every run is worse than a refusal.
+        { ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters ([ordered]@{ Days = @('Mon', 'Tue') }) } |
+            Should -Throw -ExpectedMessage '*-File cannot deliver*'
+    }
+
+    It 'still passes a single-element array through as a plain value' {
+        # One value survives -File intact, so there is nothing to refuse.
+        ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters ([ordered]@{ Days = @('Mon') }) |
+            Should -BeLike '*-Days Mon*'
     }
 
     It 'emits -Switch:$false when the script defaults that switch to true' {
@@ -1872,6 +1886,129 @@ Describe 'Invoke-PSTSMTestRun' {
         $null = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
         @(Get-ScheduledTask -ErrorAction SilentlyContinue).Count | Should -Be $before
         @(Get-ScheduledTask -TaskName 'PSTSM_ShouldNeverExist' -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
+    }
+}
+
+
+Describe 'Regressions from the second review pass' {
+    # This batch came from fuzzing and from switching CurrentCulture - angles the code-reading
+    # pass could not reach. Every one was reproduced before it was fixed.
+
+    Context 'The tokeniser does not invent types' {
+        # A value that arrived as its own token is a string. Guessing was destructive in three
+        # distinct ways, and the round trip is what made each one damaging: the parsed value goes
+        # straight back through the renderer when the task is saved again.
+        $cases = @(
+            @{ Name = 'False';        Arg = 'False';   Expect = 'False' }
+            @{ Name = 'True';         Arg = 'True';    Expect = 'True' }
+            @{ Name = 'leading zero'; Arg = '007';     Expect = '007' }
+            @{ Name = 'plain number'; Arg = '14';      Expect = '14' }
+            @{ Name = 'text';         Arg = 'plain';   Expect = 'plain' }
+        )
+        It 'keeps <Name> as the string it arrived as' -TestCases $cases {
+            param($Name, $Arg, $Expect)
+            $p = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments "-File `"C:\s.ps1`" -Val $Arg -After keep"
+            $p.Parameters['Val'] | Should -BeExactly $Expect -Because "a $Name value must arrive verbatim"
+            $p.Parameters['Val'] | Should -BeOfType [string]
+            $p.Parameters['After'] | Should -Be 'keep' -Because "a $Name value must not disturb what follows"
+        }
+
+        It 'survives the round trip that made those guesses damaging' {
+            # -Val False became $false, which the renderer OMITS -> the parameter vanished.
+            # -Val True became $true, which renders bare -> unbindable for a string parameter.
+            foreach ($v in 'False', 'True', '007') {
+                $parsed = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments "-File `"C:\s.ps1`" -Val $v"
+                $again = ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters $parsed.Parameters
+                $again | Should -BeLike "*-Val $v*" -Because "$v must survive a save"
+            }
+        }
+
+        It 'still reads an explicit -X:$false as a real Boolean' {
+            # The colon form is the only one where a Boolean is unambiguous, and the
+            # switch-default-true feature emits exactly it. That path must not regress.
+            $p = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments '-File "C:\s.ps1" -Flag:$false'
+            $p.Parameters['Flag'] | Should -BeOfType [bool]
+            $p.Parameters['Flag'] | Should -BeFalse
+        }
+
+        It 'reads a genuinely bare switch as a Boolean' {
+            $p = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments '-File "C:\s.ps1" -Flag -Other x'
+            $p.Parameters['Flag'] | Should -BeOfType [bool]
+            $p.Parameters['Flag'] | Should -BeTrue
+        }
+
+        It 'accepts a parameter name with a non-ASCII letter' {
+            # An ASCII-only identifier class demoted it to ExtraArguments while the editor still
+            # built a control from the script's param() block - so saving emitted the parameter
+            # TWICE and the task died on every run with "specified more than once".
+            $name = "Gr$([char]0xF6)sse"
+            $p = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments "-File `"C:\s.ps1`" -$name LARGE"
+            $p.Parameters[$name] | Should -Be 'LARGE'
+            $p.ExtraArguments | Should -BeNullOrEmpty -Because 'it must not also land in the raw arguments'
+        }
+    }
+
+    Context 'Arrays are refused rather than silently mangled' {
+        It 'throws for a multi-value array, naming the reason' {
+            { ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters ([ordered]@{ Days = @('Mon', 'Tue') }) } |
+                Should -Throw -ExpectedMessage '*-File cannot deliver*'
+        }
+
+        It 'proves the refusal is warranted, by running the encoding that was there before' {
+            # Not taken on faith: the old comma form is executed against a real [string[]]
+            # parameter and observed to arrive as a single element.
+            $f = Join-Path $TestDrive 'arr.ps1'
+            'param([string[]]$Arr) "count=$($Arr.Count)"; exit 0' | Set-Content -LiteralPath $f -Encoding UTF8
+            $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $f -Arr 'alpha,beta'
+            $out | Should -Match 'count=1' -Because 'under -File nothing splits on commas'
+        }
+
+        It 'still allows a single-element array' {
+            ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters ([ordered]@{ Days = @('Mon') }) |
+                Should -BeLike '*-Days Mon*'
+        }
+    }
+
+    Context 'Culture cannot reach the data path' {
+        # fi-FI substitutes '.' for the time separator; ar-SA substitutes a Hijri YEAR, which is
+        # far worse because the result still looks like a plausible date.
+        $cultures = @(
+            @{ Culture = 'en-US' }, @{ Culture = 'fi-FI' }, @{ Culture = 'id-ID' }, @{ Culture = 'ar-SA' }
+        )
+
+        It 'writes an invariant trigger time when reading a task back under <Culture>' -TestCases $cultures {
+            param($Culture)
+            # The sibling of New-PSTSMTriggerSpec's writer. It was missed when that one was fixed,
+            # so the read half of the round trip silently rewrote the schedule.
+            $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                $src = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'Functions/Task/ConvertFrom-PSTSMDefinition.ps1') -Raw
+                $src | Should -Match 'InvariantCulture' -Because 'the reader must pin the culture too'
+                # And the writer it pairs with.
+                $spec = New-PSTSMTriggerSpec -Type Daily -At '07:00'
+                $spec.At | Should -Match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$'
+            }
+            finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved }
+        }
+
+        It 'renders a [datetime] parameter value invariantly under <Culture>' -TestCases $cultures {
+            param($Culture)
+            # PS7's ConvertFrom-Json turns an exported ISO value back into a real DateTime, so a
+            # plan that has been through JSON reaches the renderer as [datetime] - and would be
+            # written onto the live command line in the local calendar.
+            $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                $a = ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' `
+                    -Parameters ([ordered]@{ When = [datetime]'2026-07-30T07:00:00' })
+                $a | Should -Match '-When 2026-07-30T07:00:00'
+            }
+            finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved }
+        }
     }
 }
 

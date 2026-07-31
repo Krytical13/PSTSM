@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 function ConvertFrom-PSTSMAction {
     <#
     .SYNOPSIS
@@ -222,7 +222,7 @@ function ConvertFrom-PSTSMAction {
     while ($idx -lt $tokens.Count) {
         $t = $tokens[$idx]
 
-        if ($t -match '^-(?<n>[A-Za-z_][A-Za-z0-9_]*):(?<v>.*)$') {
+        if ($t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*):(?<v>.*)$') {
             # -Switch:$false form. Capture both groups BEFORE any further -match, which would
             # overwrite $Matches and leave the name null.
             $name = $Matches['n']
@@ -232,28 +232,34 @@ function ConvertFrom-PSTSMAction {
             continue
         }
 
-        if ($t -match '^-(?<n>[A-Za-z_][A-Za-z0-9_]*)$') {
+        if ($t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*)$') {
             $name = $Matches['n']
             $next = if ($idx + 1 -lt $tokens.Count) { $tokens[$idx + 1] } else { $null }
 
-            if ($null -eq $next -or $next -match '^-[A-Za-z_]') {
+            if ($null -eq $next -or $next -match '^-[\p{L}_]') {
                 $params[$name] = $true          # bare switch
                 $idx++
             }
             else {
-                # No comma-splitting. $next has already been through the tokeniser, so a comma in
-                # it was inside quotes and is part of the value - "Quarter close, please review"
-                # is one subject line, not two. Under -File, PowerShell never splits a quoted
-                # argument on commas either, so an array can never legitimately arrive this way.
-                if ($next -match '(?i)^\$?true$') { $params[$name] = $true }
-                elseif ($next -match '(?i)^\$?false$') { $params[$name] = $false }
-                # TryParse rather than a cast: the regex matches any run of digits, and a value
-                # like a phone number overflows Int32. The cast threw, and nothing up the call
-                # chain caught it - one such task emptied the entire list.
-                elseif ($next -match '^-?\d+$' -and [int]::TryParse($next, [ref]$null)) {
-                    $params[$name] = [int]$next
-                }
-                else { $params[$name] = $next }
+                # A value that arrived as its OWN token is a string, and nothing else. This used
+                # to guess at a type, and every guess was destructive:
+                #
+                #   -Val False  became $false, which the renderer then OMITS   -> parameter deleted
+                #   -Val True   became $true, which renders as a bare -Val     -> unbindable, and
+                #               the task fails on every run
+                #   -Val 007    became 7                                       -> leading zeros lost
+                #
+                # There is nothing to gain from the guess. PowerShell hands -File arguments to the
+                # script as strings and lets the script's own param() block do the conversion, so
+                # keeping the string is both simpler and exactly what the script will receive.
+                #
+                # A genuine Boolean can still arrive: -Val:$false is handled above, where the
+                # colon makes the intent explicit, and a bare -Val is handled in the branch above
+                # this one. Those are the only two forms that can honestly mean a switch.
+                #
+                # No comma-splitting either. $next has already been through the tokeniser, so a
+                # comma in it was inside quotes and is part of the value.
+                $params[$name] = $next
                 $idx += 2
             }
             continue
