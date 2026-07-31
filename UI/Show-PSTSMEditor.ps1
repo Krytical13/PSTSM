@@ -542,8 +542,13 @@ function Show-PSTSMEditor {
             $lvChecks.Items.Clear()
             $lblChecks.Text = 'Preflight'
             $lblChecks.ForeColor = $t.Accent
+            $btnTest.Enabled = $false
             return
         }
+        # Deliberately NOT tied to the error count the way Save is. A plan with preflight errors
+        # is often exactly the one worth running, because the run explains why. Only a task whose
+        # action this tool cannot model is excluded - there is nothing meaningful to run.
+        $btnTest.Enabled = -not $state.Locked
 
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.AppendLine('Program')
@@ -934,6 +939,10 @@ function Show-PSTSMEditor {
     }
 
     # --- action bar --------------------------------------------------------------------
+    # Sits beside Export because both act on the plan as it stands rather than committing it.
+    # Named for what it does - it really runs the script - rather than "Check" or "Validate",
+    # which would imply something safe and read-only that this is not.
+    $btnTest = New-PSTSMUIButton -Text 'Test run' -Width 100
     $btnExport = New-PSTSMUIButton -Text 'Export plan...' -Width 118
     # Named for what it does, once, and it never changes afterwards.
     $btnSave = New-PSTSMUIButton -Text $(if ($state.IsEdit) { 'Save changes' } else { 'Create task' }) -Primary -Width 130
@@ -1049,7 +1058,13 @@ function Show-PSTSMEditor {
             $form.Close()
         })
 
-    $bar = New-PSTSMUIActionBar -LeftButton @($btnExport) -RightButton @($btnCancel, $btnSave)
+    $btnTest.add_Click({
+            $plan = & $buildPlan
+            if (-not $plan) { return }
+            Show-PSTSMTestRun -Plan $plan -Owner $form
+        })
+
+    $bar = New-PSTSMUIActionBar -LeftButton @($btnTest, $btnExport) -RightButton @($btnCancel, $btnSave)
 
     $root.Controls.Add($leftScroll, 0, 0)
     $root.Controls.Add($rightCol, 1, 0)

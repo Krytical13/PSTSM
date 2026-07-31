@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+﻿# SPDX-License-Identifier: GPL-3.0-or-later
 @{
     RootModule        = 'PSTSM.psm1'
     ModuleVersion     = '0.4.0'
@@ -45,6 +45,7 @@
         # public. Exporting internal plumbing only widens the surface people can depend on.
         'Test-PSTSMPlanNeedsElevation'
         'Test-PSTSMElevated'
+        'Invoke-PSTSMTestRun'
         'New-PSTSMLogWrapper'
         'ConvertTo-PSTSMCimTrigger'
         'ConvertFrom-PSTSMAction'
@@ -69,6 +70,7 @@
         'Show-PSTSMAccountPicker'
         'Show-PSTSMHealth'
         'Show-PSTSMRunLog'
+        'Show-PSTSMTestRun'
         'Initialize-PSTSMUIHost'
     )
     CmdletsToExport   = @()

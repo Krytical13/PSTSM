@@ -1759,3 +1759,119 @@ Describe 'User-visible text is culture-independent' {
     }
 }
 
+
+Describe 'Invoke-PSTSMTestRun' {
+    # This is the one place the tool executes the operator's script rather than describing it,
+    # so the tests actually run things. Fixtures only; nothing is registered.
+    BeforeAll {
+        $script:RunDir = Join-Path $TestDrive 'testrun'
+        New-Item -ItemType Directory -Path $script:RunDir -Force | Out-Null
+
+        function script:New-RunFixture {
+            param([string]$Name, [string]$Body)
+            $p = Join-Path $script:RunDir "$Name.ps1"
+            Set-Content -LiteralPath $p -Value $Body -Encoding UTF8
+            $p
+        }
+    }
+
+    It 'runs the script and reports a zero exit code' {
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Ok' '"hello from the script"; exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.Started | Should -BeTrue
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match 'hello from the script'
+        $r.TimedOut | Should -BeFalse
+    }
+
+    It 'reports a non-zero exit code and decodes it' {
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Fails' 'exit 2')
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.ExitCode | Should -Be 2
+        # The decoded text is the point: it is what Task Scheduler will show as Last Run Result.
+        $r.ExitText | Should -BeLike '*File not found*'
+    }
+
+    It 'captures stderr separately so a failing script does not look silent' {
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Noisy' 'Write-Error "went wrong"; exit 1')
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.Output | Should -Match 'stderr'
+        $r.Output | Should -Match 'went wrong'
+    }
+
+    It 'passes the plan''s parameters through, quoted as they will be registered' {
+        # The whole value of running the REAL argument string: this is the layer that has broken
+        # before, and a value with a space and a trailing backslash is what broke it.
+        $body = 'param([string]$Path, [int]$Days) "path=[$Path] days=[$Days]"; exit 0'
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Params' $body) `
+            -Parameters ([ordered]@{ Path = 'C:\Program Files\App\'; Days = 14 })
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match ([regex]::Escape('path=[C:\Program Files\App\]'))
+        $r.Output | Should -Match ([regex]::Escape('days=[14]'))
+    }
+
+    It 'surfaces a script that waits for input, instead of hanging on it' {
+        # -NonInteractive is part of the registered argument string, so Read-Host fails here
+        # exactly as it would at 3am rather than blocking on a prompt nobody will ever answer.
+        #
+        # Note what it does NOT do: with the default ErrorActionPreference the script carries on
+        # past the failure and still reaches exit 0. So this run reports SUCCESS while having
+        # silently done nothing - which is the precise trap PSTSM's own EXIT_CODE check warns
+        # about, and the reason this dialog shows stderr and the decoded result together rather
+        # than a green tick.
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Prompts' '$x = Read-Host "name"; exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -TimeoutSeconds 20 -Confirm:$false
+        $r.TimedOut | Should -BeFalse -Because 'NonInteractive must make it fail fast, not block'
+        $r.Output | Should -Match '(?i)non-?interactive' -Because 'the reason must be visible even though the exit code is 0'
+    }
+
+    It 'stops a script that runs too long and says so' {
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Hangs' 'Start-Sleep -Seconds 120; exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -TimeoutSeconds 5 -Confirm:$false
+        $r.TimedOut | Should -BeTrue
+        $r.Duration.TotalSeconds | Should -BeLessThan 30
+    }
+
+    It 'runs in the plan''s working directory' {
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Cwd' '(Get-Location).Path; exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.Output.Trim() | Should -Be $plan.WorkingDirectory
+    }
+
+    It 'reports who it ran as, because that is what it cannot prove' {
+        # A script that works as you and fails as SYSTEM is precisely what this misses, so the
+        # identity has to come back for the dialog to show.
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Who' 'exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        $r.RanAs | Should -Be ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+    }
+
+    It 'does not drain into a deadlock on a chatty script' {
+        # Reading both streams only after WaitForExit deadlocks once a script writes more than the
+        # pipe buffer holds - a few KB. It would pass every small test and hang in the field.
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Chatty' '1..4000 | ForEach-Object { "line $_ of output padding padding padding" }; exit 0')
+        $r = Invoke-PSTSMTestRun -Plan $plan -TimeoutSeconds 60 -Confirm:$false
+        $r.TimedOut | Should -BeFalse -Because 'both streams are drained while the process runs'
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match 'line 4000'
+    }
+
+    It 'does nothing under -WhatIf' {
+        $marker = Join-Path $script:RunDir 'sideeffect.txt'
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'Writes' "'ran' | Set-Content -LiteralPath '$marker'; exit 0")
+        $r = Invoke-PSTSMTestRun -Plan $plan -WhatIf
+        $r.Started | Should -BeFalse
+        Test-Path -LiteralPath $marker | Should -BeFalse -Because '-WhatIf must not run the script'
+    }
+
+    It 'registers nothing' {
+        # The feature exists to avoid committing anything. Assert that plainly.
+        $before = @(Get-ScheduledTask -ErrorAction SilentlyContinue).Count
+        $plan = New-PSTSMPlan -ScriptPath (script:New-RunFixture 'NoReg' 'exit 0') -TaskName 'PSTSM_ShouldNeverExist'
+        $null = Invoke-PSTSMTestRun -Plan $plan -Confirm:$false
+        @(Get-ScheduledTask -ErrorAction SilentlyContinue).Count | Should -Be $before
+        @(Get-ScheduledTask -TaskName 'PSTSM_ShouldNeverExist' -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
+    }
+}
+

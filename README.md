@@ -1,4 +1,4 @@
-# PSTSM
+﻿# PSTSM
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
@@ -382,7 +382,7 @@ Do not "tidy" any of them without re-running the experiment.
 **Task Scheduler** — `Get-PSTSMInventory`, `Register-PSTSMPlan`, `New-PSTSMLogWrapper`,
 `ConvertFrom-PSTSMDefinition`, `ConvertFrom-PSTSMAction`, `ConvertTo-PSTSMCimTrigger`,
 `ConvertFrom-PSTSMCimTrigger`, `ConvertFrom-PSTSMDuration`, `ConvertFrom-PSTSMResultCode`,
-`ConvertFrom-PSTSMTriggerSummary`
+`ConvertFrom-PSTSMTriggerSummary`, `Invoke-PSTSMTestRun`
 
 **Health, origin and run logs** — `Test-PSTSMHealth`, `Get-PSTSMTaskOrigin`,
 `Get-PSTSMTaskRunLog`
@@ -394,7 +394,7 @@ Do not "tidy" any of them without re-running the experiment.
 `New-PSTSMGmsa`, `Install-PSTSMGmsa`, `Grant-PSTSMBatchLogonRight`
 
 **UI** — `Show-PSTSM`, `Show-PSTSMEditor`, `Show-PSTSMTriggerDialog`,
-`Show-PSTSMGmsaDialog`, `Show-PSTSMAccountPicker`, `Show-PSTSMHealth`, `Show-PSTSMRunLog`,
+`Show-PSTSMGmsaDialog`, `Show-PSTSMAccountPicker`, `Show-PSTSMHealth`, `Show-PSTSMRunLog`, `Show-PSTSMTestRun`,
 `Initialize-PSTSMUIHost`
 
 The engine never references the UI, so it stays usable from a console, a build agent, or a
