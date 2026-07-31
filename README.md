@@ -144,6 +144,25 @@ Export-PSTSMPlan -Plan $plan -Path .\Plans\NightlyReport.task.json
 Import-PSTSMPlan -Path .\Plans\NightlyReport.task.json | Register-PSTSMPlan
 ```
 
+## Repository layout
+
+The module is at the root, because that is what you clone and import. Everything else is
+scaffolding for working *on* it:
+
+| | |
+|---|---|
+| `PSTSM.psd1` / `.psm1` | the module — manifest and loader |
+| `Functions/` | the engine: script analysis, plan, validation, Task Scheduler round trip, gMSA |
+| `UI/` | the WinForms front end |
+| `Start-PSTSM.ps1`, `PSTSM.cmd` | entry points |
+| `PSTSM.Elevate.ps1` | the elevated helper, spawned for one registration at a time |
+| **`Tests/`** | **not shipped** — Pester suites |
+| **`Tools/`** | **not shipped** — the test runner |
+| **`.github/`** | **not shipped** — CI |
+
+The manifest's `FileList` says the same thing in a form tooling can read. Copy the shipped rows
+anywhere and the tool works; the rest is only needed to develop it.
+
 ## What it writes next to your script
 
 Two things, both beside the `.ps1` the task runs, and both already in this repo's `.gitignore`:

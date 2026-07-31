@@ -78,6 +78,22 @@
     VariablesToExport = @()
     AliasesToExport   = @()
 
+    # What the module IS, as opposed to what the repository contains. Everything under Tests\,
+    # Tools\ and .github\ is development scaffolding: never imported, never needed to run the
+    # tool, and safe to leave behind when copying this somewhere.
+    FileList          = @(
+        'PSTSM.psd1'
+        'PSTSM.psm1'
+        'PSTSM.cmd'
+        'PSTSM.Elevate.ps1'
+        'Start-PSTSM.ps1'
+        'LICENSE'
+        'README.md'
+        'TRADEMARK.md'
+        'Functions'
+        'UI'
+    )
+
     PrivateData       = @{
         PSData = @{
             Tags         = @('ScheduledTask', 'TaskScheduler', 'Automation', 'PowerShell', 'WinForms', 'gMSA')

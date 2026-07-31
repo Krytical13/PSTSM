@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Runs the test suites on every push and pull request.
+#
+# windows-latest because the whole module is Windows-specific: it talks to the Task Scheduler
+# service, reads the local Administrators group, and builds WinForms windows. There is nothing
+# meaningful to run on another platform.
+#
+# Both hosts, deliberately. GitHub's Windows runners carry Windows PowerShell 5.1 and pwsh 7, and
+# the difference matters here - 5.1 is where the parameter-binder behaviour this module works
+# around actually surfaces, and it is the host most scheduled tasks will use.
+#
+# The UI suite skips its form tests automatically when it cannot get an STA apartment, so it
+# reports honestly on a runner rather than failing. The lint and layout checks always run.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester 5
+        shell: pwsh
+        run: |
+          # Installed for AllUsers so BOTH hosts can see it. -Scope CurrentUser from pwsh lands in
+          # Documents\PowerShell\, which Windows PowerShell does not read - the single most common
+          # way "I installed Pester 5" fails to help.
+          Install-Module Pester -MinimumVersion 5.0 -Scope AllUsers -Force -SkipPublisherCheck
+          (Get-Module -ListAvailable Pester | Select-Object -First 1).Version.ToString()
+
+      - name: Run tests
+        shell: powershell
+        run: |
+          # powershell.exe rather than pwsh, so the runner itself is the 5.1 path. The script runs
+          # BOTH hosts regardless; this just means a failure to even start is caught on the older
+          # one, which is the fragile one.
+          .\Tools\Invoke-PSTSMTest.ps1
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope AllUsers -Force -SkipPublisherCheck
+          # ShouldProcess is excluded to match the project's baseline: the three functions it
+          # flags are local helpers that change nothing.
+          $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error, Warning `
+                                          -ExcludeRule PSUseShouldProcessForStateChangingFunctions
+          if ($issues) {
+              $issues | Format-Table RuleName, ScriptName, Line, Message -AutoSize | Out-String | Write-Host
+              throw "$($issues.Count) analyzer finding(s)."
+          }
+          'analyzer clean'
