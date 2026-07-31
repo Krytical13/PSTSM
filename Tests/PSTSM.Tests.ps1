@@ -2249,3 +2249,43 @@ Describe 'Values reach the script intact' {
     }
 }
 
+
+Describe 'Broker cancellation survives PowerShell exception wrapping' {
+    # Confirmed on a real machine: declining consent does NOT surface as a bare Win32Exception.
+    # PowerShell wraps anything thrown by a .NET METHOD call in a MethodInvocationException, so
+    # `catch [Win32Exception]` never matched and the Cancelled branch was unreachable - the
+    # operator got an error dialog for having said no.
+    BeforeAll {
+        $script:BrokerPlan2 = New-PSTSMPlan -ScriptPath $script:QuietScript -TaskName 'WrapCase' -RunLevel 'Highest'
+    }
+
+    It 'reports Cancelled when ERROR_CANCELLED arrives wrapped' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            $inner = New-Object System.ComponentModel.Win32Exception 1223
+            throw (New-Object System.Management.Automation.MethodInvocationException 'Exception calling "Start"', $inner)
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan2 -Confirm:$false
+        $r.Cancelled | Should -BeTrue -Because 'the Win32Exception is one level down, not at the top'
+        $r.Error | Should -BeNullOrEmpty
+    }
+
+    It 'still reports Cancelled when it arrives unwrapped' {
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            throw (New-Object System.ComponentModel.Win32Exception 1223)
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan2 -Confirm:$false
+        $r.Cancelled | Should -BeTrue
+    }
+
+    It 'explains a disabled Application Information service rather than echoing Win32 1060' {
+        # 1060 is what a disabled AppInfo service looks like. Nobody would guess that from
+        # "The specified service does not exist as an installed service".
+        Mock -ModuleName PSTSM -CommandName 'Start-PSTSMBrokerProcess' -MockWith {
+            $inner = New-Object System.ComponentModel.Win32Exception 1060
+            throw (New-Object System.Management.Automation.MethodInvocationException 'Exception calling "Start"', $inner)
+        }
+        $r = Invoke-PSTSMElevatedRegistration -Plan $script:BrokerPlan2 -Confirm:$false
+        $r.Cancelled | Should -BeFalse
+        $r.Error | Should -BeLike '*Application Information*'
+    }
+}

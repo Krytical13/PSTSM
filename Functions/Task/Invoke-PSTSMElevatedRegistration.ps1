@@ -268,14 +268,38 @@ function Invoke-PSTSMElevatedRegistration {
             $outcome = Start-PSTSMBrokerProcess -FilePath $psExe -Arguments $argLine `
                 -Visible:$needsPassword -ReplyPath $replyPath -TimeoutSeconds $TimeoutSeconds
         }
-        catch [System.ComponentModel.Win32Exception] {
+        catch {
+            # Unwrap before testing. PowerShell wraps any exception thrown by a .NET METHOD call
+            # in a MethodInvocationException, so `catch [Win32Exception]` never matched and the
+            # cancellation branch was unreachable - confirmed on a real machine, where declining
+            # consent surfaced as MethodInvocationException with the Win32Exception one level
+            # down. This is the same trap that made Start-Process unusable here; swapping to
+            # ProcessStartInfo fixed the discarded inner exception but not the wrapping.
+            $win32 = $null
+            $ex = $_.Exception
+            while ($ex) {
+                if ($ex -is [System.ComponentModel.Win32Exception]) { $win32 = $ex; break }
+                $ex = $ex.InnerException
+            }
+
             # 1223 ERROR_CANCELLED is the operator dismissing the UAC prompt. That is a decision,
             # not a fault, so it is reported separately and the caller stays silent about it.
-            if ($_.Exception.NativeErrorCode -eq 1223) {
+            if ($win32 -and $win32.NativeErrorCode -eq 1223) {
                 $result.Cancelled = $true
                 return $result
             }
-            throw
+
+            # Anything else is a real failure, but the raw text is unhelpful on its own - 1060
+            # ("service does not exist") is what a disabled Application Information service looks
+            # like, and nobody would guess that from the message.
+            $result.Error = if ($win32) {
+                "Could not start the elevated helper: $($win32.Message) (Win32 $($win32.NativeErrorCode))." +
+                $(if ($win32.NativeErrorCode -eq 1060) {
+                        ' The Application Information service handles elevation; if it is disabled, no UAC prompt can appear.'
+                    })
+            }
+            else { $_.Exception.Message }
+            return $result
         }
 
         if (-not $outcome.Exited) {
