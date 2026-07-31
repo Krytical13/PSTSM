@@ -66,20 +66,19 @@ function New-PSTSMGmsa {
         [switch]$PassThru
     )
 
-    if (-not (Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
-        throw 'The ActiveDirectory module is required to create a gMSA. Install RSAT AD PowerShell.'
-    }
-
-    $bare = $Name.TrimEnd('$')
-
-    # BEFORE the module import, not merely before the AD call. This is offline validation that
-    # needs nothing installed, and the help has always promised it happens first - but importing
-    # ActiveDirectory came earlier, so on a machine without RSAT a plainly bad name produced
-    # "module not found" instead of the error that would have fixed it. Caught by CI, on a runner
-    # that has no RSAT.
+    # Offline validation FIRST - before the RSAT check, before the import, before anything that
+    # asks the machine a question. It needs nothing installed and nothing reachable, and the help
+    # has always promised it comes first.
+    #
+    # It did not. The name check sat below both the RSAT guard and the module import, so on a
+    # machine without RSAT a plainly bad name produced "The ActiveDirectory module is required" -
+    # the least useful of the two errors, and the one that sends somebody to install software
+    # they may not even need for the thing they got wrong. Caught by CI on a runner with no RSAT,
+    # and my first attempt at the fix moved it only below the guard, which CI then caught again.
     #
     # Checked here rather than left to AD, whose error for this is an opaque constraint
     # violation. The sAMAccountName is <name>$, and the limit applies to the whole thing.
+    $bare = $Name.TrimEnd('$')
     if ($bare.Length -gt 15) {
         throw "gMSA name '$bare' is $($bare.Length) characters. The sAMAccountName is '$bare`$' and cannot exceed 15 characters."
     }
@@ -87,6 +86,9 @@ function New-PSTSMGmsa {
         throw "gMSA name '$bare' contains a character that is not valid in a sAMAccountName."
     }
 
+    if (-not (Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
+        throw 'The ActiveDirectory module is required to create a gMSA. Install RSAT AD PowerShell.'
+    }
     Import-Module ActiveDirectory -ErrorAction Stop
 
     $domain = Get-ADDomain -ErrorAction Stop
