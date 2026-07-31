@@ -324,19 +324,28 @@ function Test-PSTSMPlan {
         # domain account is not an administrator because a lookup failed would be worse than
         # silence.
         if ($false -eq $principalIsAdmin) {
-            $advice = if ($ScriptProfile.RequiresElevation) {
-                "The script declares '#Requires -RunAsAdministrator', so it will fail at run time. " +
-                'Run the task as an account that IS an administrator here, or grant this one the ' +
-                'specific rights the script needs.'
+            # The editor greys the box out for a non-administrator, so a NEW task cannot reach
+            # this state. What does reach it is an existing task that was created elsewhere, or
+            # one whose account was changed afterwards - which is precisely when someone needs
+            # telling, and why the control stays enabled while it is ticked.
+            if ($ScriptProfile.RequiresElevation) {
+                # Not a cosmetic problem. The script demands administrator rights, the principal
+                # cannot reach them, and no amount of ticking will change that: the task fails on
+                # every run. That is the same class as the ELEVATION check above, from the other
+                # direction, and it gets the same severity.
+                Add-PSTSMCheck 'RUNLEVEL_NO_EFFECT' 'Error' 'This task cannot get the rights its script demands' `
+                    ("The script declares '#Requires -RunAsAdministrator', but $($Plan.Principal.UserId) " +
+                    'is not an administrator on this machine, so "highest available" cannot reach them.') `
+                    ('Run the task as an account that IS an administrator here, or grant this one the ' +
+                    'specific rights the script needs. It will fail on every run as it stands.')
             }
             else {
-                'Untick it, or run the task as an account that has the rights the script needs. ' +
-                'Leaving it ticked is harmless but misleading - it reads like the task is privileged.'
+                Add-PSTSMCheck 'RUNLEVEL_NO_EFFECT' 'Warning' 'Highest privileges are not doing anything here' `
+                    ("$($Plan.Principal.UserId) is not an administrator on this machine, so " +
+                    '"highest available" is already their normal privilege level.') `
+                    ('Untick it - the setting is harmless but misleading, since it reads like the task ' +
+                    'is privileged. Or run the task as an account that has the rights the script needs.')
             }
-            Add-PSTSMCheck 'RUNLEVEL_NO_EFFECT' 'Warning' 'Highest privileges will not do anything here' `
-                ("$($Plan.Principal.UserId) is not an administrator on this machine, so " +
-                '"highest available" is already their normal privilege level.') `
-                $advice
         }
     }
 

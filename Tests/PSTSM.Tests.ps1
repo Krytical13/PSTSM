@@ -2355,16 +2355,17 @@ Describe 'Highest privileges that would achieve nothing' {
         ($r | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT').Recommendation | Should -BeLike '*Untick it*'
     }
 
-    It 'escalates the advice when the script itself demands elevation' {
-        # Ticking a box that does nothing is misleading. Ticking it for a script with
-        # #Requires -RunAsAdministrator means the task is going to fail, and the advice changes
-        # from "untick it" to "use an account that can actually do this".
+    It 'becomes an Error when the script itself demands elevation' {
+        # A no-op setting is misleading. A no-op setting on a script that declares
+        # #Requires -RunAsAdministrator means the task fails on EVERY run - the same class as the
+        # ELEVATION check, from the other direction, so it gets the same severity.
         Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $false }
         $admin = Join-Path $TestDrive 'NeedsAdmin.ps1'
         "#Requires -RunAsAdministrator`nexit 0" | Set-Content -LiteralPath $admin -Encoding UTF8
         $plan = New-PSTSMPlan -ScriptPath $admin -RunLevel 'Highest' -LogonType 'Interactive'
-        $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
-        ($r | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT').Recommendation | Should -BeLike '*fail at run time*'
+        $check = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT')[0]
+        $check.Severity | Should -Be 'Error'
+        $check.Recommendation | Should -BeLike '*fail on every run*'
     }
 
     It 'stays quiet when the principal IS an administrator' {

@@ -766,3 +766,50 @@ Describe 'Action bar accessibility' -Skip:(-not $script:IsSta) {
         $main | Should -Match 'AlternatingRowsDefaultCellStyle\.ForeColor'
     }
 }
+
+Describe 'Highest-privileges checkbox reflects what it can achieve' -Skip:(-not $script:IsSta) {
+    # Preventing an invalid state beats diagnosing it. If "highest available" cannot reach any
+    # higher privilege for the chosen account, the box is greyed with the reason on hover rather
+    # than left tickable and then explained away in the preflight.
+    BeforeAll {
+        function script:Get-HighestCheckbox {
+            param([System.Windows.Forms.Form]$Form)
+            @(Get-AllControl -Root $Form | Where-Object {
+                    $_ -is [System.Windows.Forms.CheckBox] -and $_.Text -eq 'Run with highest privileges'
+                })[0]
+        }
+    }
+
+    It 'is enabled for a principal that is an administrator' {
+        $f = Show-PSTSMEditor -ScriptPath $script:Fixture -BuildOnly
+        try {
+            Initialize-FormLayout -Form $f
+            $box = script:Get-HighestCheckbox -Form $f
+            $box | Should -Not -BeNullOrEmpty
+            # The default principal is the current user. On any machine where these tests run as
+            # an administrator it must be tickable; where it is not, the box must be greyed - both
+            # are correct, so assert they AGREE rather than assuming which box this is.
+            $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $isAdmin = Test-PSTSMPrincipalIsAdministrator -UserId $me
+            if ($false -eq $isAdmin -and -not $box.Checked) { $box.Enabled | Should -BeFalse }
+            else { $box.Enabled | Should -BeTrue }
+        }
+        finally { if ($f) { $f.Dispose() } }
+    }
+
+    It 'never traps the setting on a task that already has it' {
+        # An existing task may have been created with it on. Disabling the control then would
+        # leave the operator unable to keep it deliberately OR turn it off, so a ticked box stays
+        # enabled and the preflight explains instead.
+        $src = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'UI/Show-PSTSMEditor.ps1') -Raw
+        $src | Should -Match ([regex]::Escape('-not $chkHighest.Checked'))
+    }
+
+    It 'caches the administrator lookup per principal' {
+        # The lookup can reach a domain controller and $refresh runs on every keystroke, so it
+        # must be keyed by the principal rather than repeated.
+        $src = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'UI/Show-PSTSMEditor.ps1') -Raw
+        $src | Should -Match 'AdminCheckFor'
+        $src | Should -Match 'PrincipalIsAdmin'
+    }
+}

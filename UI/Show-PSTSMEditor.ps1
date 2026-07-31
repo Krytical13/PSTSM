@@ -76,7 +76,11 @@ function Show-PSTSMEditor {
         # Read once. A session cannot gain an administrator token while it runs, so re-asking on
         # every keystroke would only cost time - and any elevated work happens in a child process
         # that does not change the answer here.
-        IsElevated    = (Test-PSTSMElevated)
+        IsElevated       = (Test-PSTSMElevated)
+        # Cache for "is the task's principal an administrator", which can reach a domain
+        # controller. Keyed by the principal so changing the account re-asks and nothing else does.
+        AdminCheckFor    = $null
+        PrincipalIsAdmin = $null
     }
 
     if ($Plan) {
@@ -270,6 +274,10 @@ function Show-PSTSMEditor {
     $chkHighest = New-Object System.Windows.Forms.CheckBox
     $chkHighest.Text = 'Run with highest privileges'
     $chkHighest.AutoSize = $true
+    # Explains the box whenever it is greyed out. A disabled control with no reason attached is
+    # just a dead end.
+    $tipHighest = New-Object System.Windows.Forms.ToolTip
+    $tipHighest.AutoPopDelay = 20000
     # Browse, not "Create gMSA" - picking an account that already exists is the normal case.
     # The picker covers gMSAs, user/service accounts and the built-in principals, sets the
     # matching logon type, and offers creation as a side door for the rarer case.
@@ -549,6 +557,41 @@ function Show-PSTSMEditor {
         # is often exactly the one worth running, because the run explains why. Only a task whose
         # action this tool cannot model is excluded - there is nothing meaningful to run.
         $btnTest.Enabled = -not $state.Locked
+
+        # --- "Run with highest privileges", where it can do nothing --------------------------
+        # HighestAvailable is literal: the task runs at the highest privilege AVAILABLE TO ITS
+        # PRINCIPAL. For an account that is not an administrator there is no higher level, so the
+        # box would be a no-op. Better to grey it out than to let it be ticked and then explain
+        # afterwards why it did nothing.
+        #
+        # It is left ENABLED when already ticked. An existing task may have been created with it
+        # on, and disabling the control would trap that setting - the operator could neither keep
+        # it deliberately nor turn it off. The preflight warning covers that case instead.
+        #
+        # Cached per principal: this can reach a domain controller, and $refresh runs on every
+        # keystroke in the form.
+        $principalNow = "$($plan.Principal.LogonType)|$($plan.Principal.UserId)"
+        if ($state.AdminCheckFor -ne $principalNow) {
+            $state.AdminCheckFor = $principalNow
+            $state.PrincipalIsAdmin = if ($plan.Principal.LogonType -in @('ServiceAccount', 'Group')) {
+                $null      # RunLevel is ignored for one and meaningless for the other
+            }
+            else {
+                Test-PSTSMPrincipalIsAdministrator -UserId $plan.Principal.UserId
+            }
+        }
+
+        if ($false -eq $state.PrincipalIsAdmin -and -not $chkHighest.Checked) {
+            $chkHighest.Enabled = $false
+            $tipHighest.SetToolTip($chkHighest,
+                "$($plan.Principal.UserId) is not an administrator on this machine, so this would " +
+                "have no effect - 'highest available' is already their normal privilege level. " +
+                'Choose an account that is an administrator to enable it.')
+        }
+        else {
+            $chkHighest.Enabled = $true
+            $tipHighest.SetToolTip($chkHighest, '')
+        }
 
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.AppendLine('Program')
