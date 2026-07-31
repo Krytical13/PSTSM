@@ -1710,3 +1710,52 @@ Describe 'PSTSM.Elevate.ps1 behaviour' {
     }
 }
 
+
+Describe 'User-visible text is culture-independent' {
+    # The trigger-time bug was one instance of "a culture-sensitive .NET default reached
+    # user-visible output". This is the other: casing.
+    #
+    # Turkish and Azerbaijani have a dotted and a dotless I as separate letters, so
+    # 'Warning'.ToUpper() is WARNİNG there and 'Inferred'.ToLower() is ınferred. The preflight
+    # list, the health list and the engine line all render through those calls, so on a Turkish
+    # machine the tool's own status words looked misspelt. ToUpperInvariant/ToLowerInvariant are
+    # the correct calls for text that is not being compared, only displayed.
+
+    It 'never uses culture-sensitive casing on displayed text' {
+        $root = Split-Path $PSScriptRoot -Parent
+        $offenders = @()
+        foreach ($file in Get-ChildItem $root -Recurse -Filter *.ps1) {
+            if ($file.FullName -like '*\Tests\*') { continue }
+            $n = 0
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                $n++
+                if ($line -match '\.ToUpper\(\)|\.ToLower\(\)') {
+                    $offenders += "$($file.Name):$n"
+                }
+            }
+        }
+        $offenders | Should -BeNullOrEmpty -Because "use ToUpperInvariant/ToLowerInvariant: $($offenders -join ', ')"
+    }
+
+    It 'renders the severity words identically under a Turkish locale' {
+        $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+        try {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture =
+            [System.Globalization.CultureInfo]::GetCultureInfo('tr-TR')
+            # These are the exact strings the preflight and health lists put on screen.
+            #
+            # -cmatch, not -match. The default is case-INSENSITIVE, and under tr-TR an uppercase
+            # 'I' case-folds to the dotless 'ı' - so 'WARNING' -match '[İı]' is TRUE and this
+            # assertion failed against text that was perfectly correct. The trap being tested for
+            # bit the test itself.
+            foreach ($word in 'Warning', 'Error', 'Info', 'Ok', 'Verified', 'Inferred') {
+                $word.ToUpperInvariant() | Should -Not -CMatch '[İı]' -Because "$word must not gain a Turkish I"
+            }
+            # And the culture-sensitive form really would break, which is what makes this worth a test.
+            'Warning'.ToUpper() | Should -CMatch 'İ' -Because 'this is the behaviour ToUpperInvariant avoids'
+            'Inferred'.ToLowerInvariant() | Should -BeExactly 'inferred'
+        }
+        finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved }
+    }
+}
+

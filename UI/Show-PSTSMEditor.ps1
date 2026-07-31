@@ -817,7 +817,7 @@ function Show-PSTSMEditor {
         $state.Suspend = $true
 
         $bits = @()
-        $bits += "Engine: $($prof.EngineId) ($($prof.EngineConfidence.ToLower()) - $($prof.EngineReason))"
+        $bits += "Engine: $($prof.EngineId) ($($prof.EngineConfidence.ToLowerInvariant()) - $($prof.EngineReason))"
         if ($prof.RequiresElevation) { $bits += 'Requires elevation' }
         if ($prof.RequiredModules.Count -gt 0) { $bits += "Modules: $(($prof.RequiredModules | ForEach-Object { $_.Name }) -join ', ')" }
         if (-not $prof.IsParseable) { $bits += 'SCRIPT DOES NOT PARSE' }
@@ -913,7 +913,7 @@ function Show-PSTSMEditor {
     $lvChecks.add_SelectedIndexChanged({
             if ($lvChecks.SelectedItems.Count -eq 0) { $txtCheckDetail.Text = ''; return }
             $c = $lvChecks.SelectedItems[0].Tag
-            $lines = @("$($c.Severity.ToUpper()): $($c.Title)")
+            $lines = @("$($c.Severity.ToUpperInvariant()): $($c.Title)")
             if ($c.Detail) { $lines += ''; $lines += $c.Detail }
             if ($c.Recommendation) { $lines += ''; $lines += "-> $($c.Recommendation)" }
             $txtCheckDetail.Text = ($lines -join [Environment]::NewLine)

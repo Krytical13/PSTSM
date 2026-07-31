@@ -129,7 +129,7 @@ function Show-PSTSMHealth {
     $lv.add_SelectedIndexChanged({
             if ($lv.SelectedItems.Count -eq 0) { return }
             $f = $lv.SelectedItems[0].Tag
-            $lines = @("$($f.Severity.ToUpper()): $($f.Title)", '', "Task:   $($f.FullName)", "Origin: $($f.Origin)")
+            $lines = @("$($f.Severity.ToUpperInvariant()): $($f.Title)", '', "Task:   $($f.FullName)", "Origin: $($f.Origin)")
             if ($f.Detail) { $lines += ''; $lines += $f.Detail }
             if ($f.Recommendation) { $lines += ''; $lines += "-> $($f.Recommendation)" }
             $txtDetail.Text = ($lines -join [Environment]::NewLine)

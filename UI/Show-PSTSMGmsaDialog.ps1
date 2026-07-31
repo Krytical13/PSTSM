@@ -188,7 +188,7 @@ function Show-PSTSMGmsaDialog {
     $lvPre.add_SelectedIndexChanged({
             if ($lvPre.SelectedItems.Count -eq 0) { $txtPreDetail.Text = ''; return }
             $c = $lvPre.SelectedItems[0].Tag
-            $lines = @("$($c.Severity.ToUpper()): $($c.Title)")
+            $lines = @("$($c.Severity.ToUpperInvariant()): $($c.Title)")
             if ($c.Detail) { $lines += ''; $lines += $c.Detail }
             if ($c.Recommendation) { $lines += ''; $lines += "-> $($c.Recommendation)" }
             $txtPreDetail.Text = ($lines -join [Environment]::NewLine)
