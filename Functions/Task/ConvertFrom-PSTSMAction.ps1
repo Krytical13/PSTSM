@@ -107,7 +107,11 @@ function ConvertFrom-PSTSMAction {
     # the remainder of the command line was swallowed into that one value. Every later parameter
     # vanished, and a switch that had been present came back absent.
     $tokens = New-Object System.Collections.Generic.List[string]
+    # Parallel to $tokens: whether that token carried any quoting. A quoted token can never be a
+    # parameter name, which is how a VALUE beginning with a dash is told apart from one.
+    $quoted = New-Object System.Collections.Generic.List[bool]
     $current = New-Object System.Text.StringBuilder
+    $wasQuoted = $false
     $inQuotes = $false
     # Tracked separately from $current.Length so that an explicitly empty argument ("") survives
     # as an empty token instead of disappearing.
@@ -122,7 +126,7 @@ function ConvertFrom-PSTSMAction {
             if ($i -lt $Arguments.Length -and $Arguments[$i] -eq '"') {
                 [void]$current.Append('\' * [math]::Floor($slashes / 2))
                 if ($slashes % 2 -eq 1) { [void]$current.Append('"') }   # escaped, literal quote
-                else { $inQuotes = -not $inQuotes }                       # delimiter
+                else { $inQuotes = -not $inQuotes; $wasQuoted = $true }    # delimiter
                 $i++
             }
             else {
@@ -134,13 +138,17 @@ function ConvertFrom-PSTSMAction {
 
         if ($ch -eq '"') {
             $inQuotes = -not $inQuotes
+            $wasQuoted = $true
             $started = $true
             $i++
             continue
         }
 
         if (($ch -eq ' ' -or $ch -eq "`t") -and -not $inQuotes) {
-            if ($started) { [void]$tokens.Add($current.ToString()); [void]$current.Clear(); $started = $false }
+            if ($started) {
+                [void]$tokens.Add($current.ToString()); [void]$quoted.Add($wasQuoted)
+                [void]$current.Clear(); $started = $false; $wasQuoted = $false
+            }
             $i++
             continue
         }
@@ -149,7 +157,7 @@ function ConvertFrom-PSTSMAction {
         $started = $true
         $i++
     }
-    if ($started) { [void]$tokens.Add($current.ToString()) }
+    if ($started) { [void]$tokens.Add($current.ToString()); [void]$quoted.Add($wasQuoted) }
 
     # --- engine switches, up to -File / -Command ---------------------------------------
     # PowerShell abbreviates host switches down to any unambiguous prefix, so -nop, -noni and
@@ -222,7 +230,7 @@ function ConvertFrom-PSTSMAction {
     while ($idx -lt $tokens.Count) {
         $t = $tokens[$idx]
 
-        if ($t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*):(?<v>.*)$') {
+        if (-not $quoted[$idx] -and $t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*):(?<v>.*)$') {
             # -Switch:$false form. Capture both groups BEFORE any further -match, which would
             # overwrite $Matches and leave the name null.
             $name = $Matches['n']
@@ -232,11 +240,12 @@ function ConvertFrom-PSTSMAction {
             continue
         }
 
-        if ($t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*)$') {
+        if (-not $quoted[$idx] -and $t -match '^-(?<n>[\p{L}_][\p{L}\p{N}_]*)$') {
             $name = $Matches['n']
             $next = if ($idx + 1 -lt $tokens.Count) { $tokens[$idx + 1] } else { $null }
 
-            if ($null -eq $next -or $next -match '^-[\p{L}_]') {
+            $nextIsName = ($idx + 1 -lt $tokens.Count) -and (-not $quoted[$idx + 1]) -and ($next -match '^-[\p{L}_]')
+            if ($null -eq $next -or $nextIsName) {
                 $params[$name] = $true          # bare switch
                 $idx++
             }

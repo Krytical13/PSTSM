@@ -25,6 +25,15 @@ function Invoke-PSTSMTestRun {
 
         Nothing is registered, and nothing is written outside whatever the script itself does -
         which is the operator's business, and the reason the button says "run", not "check".
+
+        One honest limitation, in the OUTPUT only. Windows PowerShell 5.1 writes redirected
+        standard output through the console's legacy code page, which cannot represent CJK at all
+        and mangles accented Latin. So a script that PRINTS non-ASCII may show approximated
+        characters here. Nothing else is affected and it is worth being precise about why:
+        arguments reach the script byte-for-byte (verified against a real engine, including
+        unicode), and a real task's transcript preserves unicode exactly, because the wrapper
+        writes to a file rather than to a pipe. Only this preview is lossy, and only for
+        characters the console code page lacks.
     .PARAMETER Plan
         The plan to run. Only ScriptPath, EnginePath, ArgumentString and WorkingDirectory are used.
     .PARAMETER TimeoutSeconds

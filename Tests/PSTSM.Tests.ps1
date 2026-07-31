@@ -2157,3 +2157,95 @@ Describe 'Second review pass - remaining findings' {
     }
 }
 
+
+Describe 'Argument round trip survives hostile values' {
+    # The fuzz table that found the tokeniser bugs, kept as a test so it keeps finding them.
+    # Every value goes ConvertTo -> ConvertFrom and must come back byte-identical, AND must not
+    # disturb the parameters after it - a tokeniser that mishandles a value usually swallows the
+    # rest of the command line, which is the damaging half.
+    BeforeDiscovery {
+        $script:FuzzValues = @(
+            'plain', ' ', '  spaced  '
+            'C:\Logs', 'C:\Logs\', 'C:\Program Files\App', 'C:\Program Files\App\'
+            '\\server\share', '\\server\share\', '\\server\share\path with space\'
+            'a\b', 'a\\b', 'a\\\b', 'ends\\', 'ends\\\'
+            'said "hi"', '"quoted"', 'mid"quote', 'quote"then\'
+            "O'Brien", "it's", '`backtick`', '$var', '$(cmd)', '@{a=1}'
+            'comma,sep', 'a,b,c', 'semi;colon', 'amp&and', 'pipe|bar', 'lt<gt>'
+            'caret^', 'percent%', 'hash#', 'star*', 'question?', 'bang!', 'tilde~'
+            '007', '-42', '3.14', '5551234567', '99999999999999999999'
+            'True', 'False', '$true', '$false', 'null'
+            '-leadingdash', '--double'
+            'ünïcödé', 'ключ', '日本語'
+            'trailing ', ' leading', '/slash', 'C:/forward/slash', '%TEMP%'
+        )
+    }
+
+    It 'round-trips <_> without loss or collateral damage' -ForEach $script:FuzzValues {
+        $value = $_
+        $rendered = ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' `
+            -Parameters ([ordered]@{ Val = $value; Marker = 'SENTINEL'; Tail = 'END' })
+        $back = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments $rendered
+
+        [string]$back.Parameters['Val'] | Should -BeExactly $value
+        [string]$back.Parameters['Marker'] | Should -Be 'SENTINEL' -Because 'the value must not swallow what follows'
+        [string]$back.Parameters['Tail'] | Should -Be 'END'
+    }
+
+    It 'quotes a value beginning with a dash so it cannot be read back as a parameter name' {
+        # Unquoted, -Val -leadingdash parsed as a bare switch plus an invented parameter, so
+        # reopening and saving such a task silently lost the value. The engine binds it either
+        # way, so quoting costs nothing and makes the round trip unambiguous.
+        $a = ConvertTo-PSTSMArgument -ScriptPath 'C:\s.ps1' -Parameters ([ordered]@{ Val = '-leadingdash' })
+        $a | Should -Match ([regex]::Escape('-Val "-leadingdash"'))
+    }
+
+    It 'still treats a genuinely unquoted -Name as a parameter' {
+        # The other side of that fix: quoting must not make every dash a value.
+        $back = ConvertFrom-PSTSMAction -Execute 'powershell.exe' -Arguments '-File "C:\s.ps1" -Flag -Other x'
+        $back.Parameters['Flag'] | Should -BeTrue
+        $back.Parameters['Other'] | Should -Be 'x'
+    }
+}
+
+Describe 'Values reach the script intact' {
+    # The round trip above proves PSTSM is self-consistent. This proves the command line it
+    # produces actually delivers, which is a different claim and the one that matters at 3am.
+    BeforeAll {
+        $script:DeliverScript = Join-Path $TestDrive 'deliver.ps1'
+        # UTF-8 WITH BOM: Windows PowerShell 5.1 reads a BOM-less UTF-8 .ps1 as ANSI, which
+        # mangles any non-ASCII literal inside it. PSTSM's own generated wrapper writes a BOM for
+        # exactly this reason.
+        [System.IO.File]::WriteAllText($script:DeliverScript,
+            'param([string]$Val, [string]$Marker) if ($Marker -ne "SENTINEL") { exit 9 }; [IO.File]::WriteAllText($env:PSTSM_TEST_OUT, $Val, [Text.UTF8Encoding]::new($false)); exit 0',
+            (New-Object System.Text.UTF8Encoding($true)))
+    }
+
+    $cases = @(
+        @{ Name = 'trailing backslash'; Value = 'C:\Program Files\App\' }
+        @{ Name = 'embedded quote'; Value = 'said "hi"' }
+        @{ Name = 'comma'; Value = 'Quarter close, please review' }
+        @{ Name = 'leading dash'; Value = '-leadingdash' }
+        @{ Name = 'unicode'; Value = 'ünïcödé-日本語' }
+        @{ Name = 'shell metacharacters'; Value = 'a&b|c;d^e' }
+    )
+    It 'delivers a <Name> value to the script byte-for-byte' -TestCases $cases {
+        param($Name, $Value)
+        # Read back through a FILE, not stdout: PowerShell 5.1 writes redirected output through a
+        # legacy code page that cannot represent CJK at all, so stdout would fail this for reasons
+        # that have nothing to do with argument delivery.
+        $outFile = Join-Path $TestDrive "delivered_$([guid]::NewGuid().ToString('N')).txt"
+        $env:PSTSM_TEST_OUT = $outFile
+        try {
+            $plan = New-PSTSMPlan -ScriptPath $script:DeliverScript `
+                -Parameters ([ordered]@{ Val = $Value; Marker = 'SENTINEL' })
+            $r = Invoke-PSTSMTestRun -Plan $plan -TimeoutSeconds 30 -Confirm:$false
+            $r.ExitCode | Should -Be 0 -Because "a $Name value must not break binding"
+            Test-Path -LiteralPath $outFile | Should -BeTrue
+            [System.IO.File]::ReadAllText($outFile, (New-Object System.Text.UTF8Encoding($false))) |
+                Should -BeExactly $Value
+        }
+        finally { $env:PSTSM_TEST_OUT = $null }
+    }
+}
+

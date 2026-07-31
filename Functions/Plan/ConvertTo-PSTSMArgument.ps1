@@ -221,6 +221,13 @@ function ConvertTo-PSTSMQuotedValue {
     # unquoted 14 reads better in the preview pane than "14".
     if (-not $AlwaysQuote -and $text -match '^-?\d+(\.\d+)?$') { return $text }
 
+    # A value that STARTS with a dash is always quoted. Unquoted, it is indistinguishable from a
+    # parameter name when the task is read back: -Val -leadingdash parsed as a bare switch -Val
+    # plus an invented parameter -leadingdash, so reopening and saving such a task lost the value.
+    # The real engine binds it correctly either way, so quoting costs nothing and makes the round
+    # trip unambiguous - which is the property the whole reader depends on.
+    if ($text -like '-*') { $AlwaysQuote = $true }
+
     # $true / $false must not be quoted or they arrive as the strings "True"/"False".
     if (-not $AlwaysQuote -and $text -match '^\$(true|false)$') { return $text }
 
