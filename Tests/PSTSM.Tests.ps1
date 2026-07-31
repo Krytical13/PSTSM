@@ -2289,3 +2289,102 @@ Describe 'Broker cancellation survives PowerShell exception wrapping' {
         $r.Error | Should -BeLike '*Application Information*'
     }
 }
+
+Describe 'Highest privileges that would achieve nothing' {
+    # RunLevel HIGHEST is HighestAvailable, and the word is literal: the task runs at the highest
+    # privilege AVAILABLE TO ITS PRINCIPAL. Ticking it for a non-administrator reaches nothing.
+    #
+    # This replaced a genuine uncertainty rather than papering over it. Whether Windows ACCEPTS
+    # such a registration turned out to vary with the logon type, so deciding on that basis meant
+    # either silently permitting a no-op or blocking something legal. What the setting will
+    # actually DO is true either way, and is the thing worth telling the operator.
+
+    It 'says nothing when the principal cannot be resolved' {
+        # Three-valued on purpose: $null means "could not determine", and silence is mandatory
+        # there. Telling somebody their domain account is not an administrator because a lookup
+        # failed would be worse than saying nothing.
+        Test-PSTSMPrincipalIsAdministrator -UserId 'NOSUCHDOMAIN\nobody' | Should -BeNullOrEmpty
+        Test-PSTSMPrincipalIsAdministrator -UserId '' | Should -BeNullOrEmpty
+    }
+
+    It 'knows the well-known service accounts without a lookup' {
+        Test-PSTSMPrincipalIsAdministrator -UserId 'S-1-5-18' | Should -BeTrue -Because 'SYSTEM is the most privileged principal there is'
+        Test-PSTSMPrincipalIsAdministrator -UserId 'S-1-5-19' | Should -BeFalse -Because 'LOCAL SERVICE is deliberately minimal'
+        Test-PSTSMPrincipalIsAdministrator -UserId 'S-1-5-20' | Should -BeFalse -Because 'NETWORK SERVICE is deliberately minimal'
+    }
+
+    It 'can actually read the local Administrators group' {
+        # The first version translated the group SID to a NAME and passed that to
+        # Get-LocalGroupMember, which rejects the qualified "BUILTIN\Administrators" form. Every
+        # lookup failed, the function answered "unknown" for everybody, and the check that
+        # consumes it would have been permanently silent - a dead check that looks alive.
+        #
+        # This asserts the lookup itself works, independently of who happens to be in the group.
+        { Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop | Get-LocalGroupMember -ErrorAction Stop } |
+            Should -Not -Throw
+
+        # And that a direct member is actually reported as one, which is the path that matters.
+        $members = @(Get-LocalGroup -SID 'S-1-5-32-544' | Get-LocalGroupMember -ErrorAction SilentlyContinue |
+                Where-Object { $_.ObjectClass -eq 'User' })
+        if ($members.Count -gt 0) {
+            Test-PSTSMPrincipalIsAdministrator -UserId $members[0].SID.Value | Should -BeTrue
+        }
+    }
+
+    It 'agrees with the running identity on this machine' {
+        # Whatever this box is, the answer for the current user must match its actual group
+        # membership - which is NOT the same question as whether the token is elevated.
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $answer = Test-PSTSMPrincipalIsAdministrator -UserId $me
+        if ($null -ne $answer) {
+            $adminGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate(
+                [System.Security.Principal.NTAccount]).Value
+            $direct = @(Get-LocalGroupMember -Group $adminGroup -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -eq $me })
+            if ($direct.Count -gt 0) { $answer | Should -BeTrue }
+        }
+    }
+
+    It 'warns when Highest is ticked for an account that is not an administrator' {
+        # Simulated rather than requiring a second account: the check consumes the function's
+        # answer, so mocking it is what isolates the decision being tested.
+        Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $false }
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest' -LogonType 'Interactive'
+        $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+        ($r | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT').Severity | Should -Be 'Warning'
+        ($r | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT').Recommendation | Should -BeLike '*Untick it*'
+    }
+
+    It 'escalates the advice when the script itself demands elevation' {
+        # Ticking a box that does nothing is misleading. Ticking it for a script with
+        # #Requires -RunAsAdministrator means the task is going to fail, and the advice changes
+        # from "untick it" to "use an account that can actually do this".
+        Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $false }
+        $admin = Join-Path $TestDrive 'NeedsAdmin.ps1'
+        "#Requires -RunAsAdministrator`nexit 0" | Set-Content -LiteralPath $admin -Encoding UTF8
+        $plan = New-PSTSMPlan -ScriptPath $admin -RunLevel 'Highest' -LogonType 'Interactive'
+        $r = @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck)
+        ($r | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT').Recommendation | Should -BeLike '*fail at run time*'
+    }
+
+    It 'stays quiet when the principal IS an administrator' {
+        Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $true }
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest' -LogonType 'Interactive'
+        @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT') |
+            Should -HaveCount 0
+    }
+
+    It 'stays quiet when the answer is unknown' {
+        Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $null }
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -RunLevel 'Highest' -LogonType 'Interactive'
+        @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT') |
+            Should -HaveCount 0 -Because 'an unresolvable account must not be accused of anything'
+    }
+
+    It 'does not fire for a service account, where RunLevel is documented as ignored' {
+        Mock -ModuleName PSTSM -CommandName 'Test-PSTSMPrincipalIsAdministrator' -MockWith { $false }
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'ServiceAccount' -UserId 'SYSTEM'
+        @(Test-PSTSMPlan -Plan $plan -SkipExistingTaskCheck | Where-Object Id -eq 'RUNLEVEL_NO_EFFECT') |
+            Should -HaveCount 0
+    }
+}

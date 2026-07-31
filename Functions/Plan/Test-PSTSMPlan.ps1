@@ -303,6 +303,43 @@ function Test-PSTSMPlan {
             'Tick "Run with highest privileges".'
     }
 
+    # --- does "highest privileges" actually give this account anything? -------------------
+    # RunLevel HIGHEST is HighestAvailable in the XML, and that word is literal: the task runs at
+    # the highest privilege AVAILABLE TO ITS PRINCIPAL. Ticking it for an account that is not an
+    # administrator reaches nothing - the task runs with identical rights either way, and a script
+    # that needed elevation still fails, just later and with a worse error.
+    #
+    # This is the honest answer to a question that turned out to have a murky edge: whether
+    # Windows ACCEPTS such a registration varies with the logon type, and depending on that would
+    # have meant either silently permitting a no-op or blocking something legal. Neither helps.
+    # Saying what the setting will actually do is true regardless of which way the service rules.
+    #
+    # Skipped for service accounts and groups: the RunLevel is documented as ignored for the
+    # former, and meaningless for the latter.
+    if ($Plan.Principal.RunLevel -eq 'Highest' -and
+        $Plan.Principal.LogonType -notin @('ServiceAccount', 'Group')) {
+
+        $principalIsAdmin = Test-PSTSMPrincipalIsAdministrator -UserId $Plan.Principal.UserId
+        # $null means undeterminable, and then this says nothing at all. Telling somebody their
+        # domain account is not an administrator because a lookup failed would be worse than
+        # silence.
+        if ($false -eq $principalIsAdmin) {
+            $advice = if ($ScriptProfile.RequiresElevation) {
+                "The script declares '#Requires -RunAsAdministrator', so it will fail at run time. " +
+                'Run the task as an account that IS an administrator here, or grant this one the ' +
+                'specific rights the script needs.'
+            }
+            else {
+                'Untick it, or run the task as an account that has the rights the script needs. ' +
+                'Leaving it ticked is harmless but misleading - it reads like the task is privileged.'
+            }
+            Add-PSTSMCheck 'RUNLEVEL_NO_EFFECT' 'Warning' 'Highest privileges will not do anything here' `
+                ("$($Plan.Principal.UserId) is not an administrator on this machine, so " +
+                '"highest available" is already their normal privilege level.') `
+                $advice
+        }
+    }
+
     # --- modules -----------------------------------------------------------------------
     foreach ($m in $ScriptProfile.RequiredModules) {
         $found = @(Get-Module -ListAvailable -Name $m.Name -ErrorAction SilentlyContinue)

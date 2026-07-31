@@ -404,7 +404,7 @@ Do not "tidy" any of them without re-running the experiment.
 **Health, origin and run logs** — `Test-PSTSMHealth`, `Get-PSTSMTaskOrigin`,
 `Get-PSTSMTaskRunLog`
 
-**Elevation** — `Test-PSTSMElevated`, `Test-PSTSMPlanNeedsElevation`,
+**Elevation** — `Test-PSTSMElevated`, `Test-PSTSMPlanNeedsElevation`, `Test-PSTSMPrincipalIsAdministrator`,
 `Invoke-PSTSMElevatedRegistration`
 
 **Accounts and gMSA** — `Get-PSTSMRunAsAccount`, `Test-PSTSMGmsaPrerequisite`,

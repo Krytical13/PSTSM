@@ -45,6 +45,7 @@
         # public. Exporting internal plumbing only widens the surface people can depend on.
         'Test-PSTSMPlanNeedsElevation'
         'Test-PSTSMElevated'
+        'Test-PSTSMPrincipalIsAdministrator'
         'Invoke-PSTSMTestRun'
         'New-PSTSMLogWrapper'
         'ConvertTo-PSTSMCimTrigger'
