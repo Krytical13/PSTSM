@@ -975,6 +975,79 @@ Describe 'Editing existing tasks of every shape' {
     }
 }
 
+Describe 'Get-PSTSMGmsaState caching' {
+    # The directory reads behind the gMSA checks. Test-PSTSMPlan runs on every editor refresh, so
+    # without memoisation a gMSA task means two DC round trips per keystroke burst - which on a
+    # slow link is the window stalling on the directory while the operator types somewhere else.
+    # Mocked, so this runs on a machine with no domain and no RSAT. Called through InModuleScope
+    # because the function is internal plumbing, like Start-PSTSMBrokerProcess.
+    BeforeEach {
+        # The cache is module state and outlives a single It, so each case starts from a known
+        # position rather than inheriting whatever the previous one left.
+        InModuleScope PSTSM { $script:PSTSMGmsaCache = @{} }
+    }
+
+    It 'reads the directory once for repeated calls about the same account' {
+        Mock -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -MockWith { [pscustomobject]@{ Name = 'svc_x' } }
+        Mock -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -MockWith { $true }
+
+        InModuleScope PSTSM { 1..5 | ForEach-Object { $null = Get-PSTSMGmsaState -Identity 'DOMAIN\svc_x$' } }
+
+        Should -Invoke -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -Times 1 -Exactly
+        Should -Invoke -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -Times 1 -Exactly
+    }
+
+    It 'keys the cache by account, so a different gMSA is looked up on its own' {
+        Mock -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -MockWith { [pscustomobject]@{ Name = 'svc' } }
+        Mock -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -MockWith { $true }
+
+        InModuleScope PSTSM {
+            $null = Get-PSTSMGmsaState -Identity 'svc_a$'
+            $null = Get-PSTSMGmsaState -Identity 'svc_b$'
+        }
+
+        Should -Invoke -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -Times 2 -Exactly
+    }
+
+    It 'normalises the trailing $ and any domain prefix to the same cache entry' {
+        Mock -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -MockWith { [pscustomobject]@{ Name = 'svc_x' } }
+        Mock -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -MockWith { $true }
+
+        InModuleScope PSTSM {
+            $null = Get-PSTSMGmsaState -Identity 'svc_x'
+            $null = Get-PSTSMGmsaState -Identity 'svc_x$'
+            $null = Get-PSTSMGmsaState -Identity 'CONTOSO\svc_x$'
+        }
+
+        Should -Invoke -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -Times 1 -Exactly
+    }
+
+    It 're-reads when asked to, so a freshly created account is not hidden by the cache' {
+        Mock -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -MockWith { [pscustomobject]@{ Name = 'svc_x' } }
+        Mock -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -MockWith { $true }
+
+        InModuleScope PSTSM {
+            $null = Get-PSTSMGmsaState -Identity 'svc_x$'
+            $null = Get-PSTSMGmsaState -Identity 'svc_x$' -Force
+        }
+
+        Should -Invoke -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -Times 2 -Exactly
+    }
+
+    It 'does not test an account that does not exist' {
+        # Test-ADServiceAccount is a second round trip, and there is nothing to test when the
+        # lookup found nothing.
+        Mock -ModuleName PSTSM -CommandName 'Get-ADServiceAccount' -MockWith { throw 'not found' }
+        Mock -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -MockWith { $true }
+
+        $state = InModuleScope PSTSM { Get-PSTSMGmsaState -Identity 'svc_missing$' }
+
+        $state.Exists | Should -BeFalse
+        $state.UsableKnown | Should -BeFalse
+        Should -Invoke -ModuleName PSTSM -CommandName 'Test-ADServiceAccount' -Times 0 -Exactly
+    }
+}
+
 Describe 'Register-PSTSMPlan password handling' {
     It 'refuses a Password principal with no password, and points at gMSA' {
         $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -LogonType 'Password' -UserId 'CONTOSO\svc_x'

@@ -305,24 +305,25 @@ function Test-PSTSMPlan {
         }
         else {
             $leaf = ($gmsa -split '\\')[-1]
-            $account = $null
-            try { $account = Get-ADServiceAccount -Identity ($leaf.TrimEnd('$')) -ErrorAction Stop }
-            catch { Write-Verbose "Get-ADServiceAccount failed for '$leaf': $($_.Exception.Message)" }
 
-            if (-not $account) {
+            # Both directory reads go through Get-PSTSMGmsaState, which memoises them for a few
+            # seconds. This preflight runs on every editor refresh, and without that a gMSA task
+            # meant two DC round trips per pass - on a slow link the window stalled on the
+            # directory while the operator was typing in a field unrelated to the account.
+            # Test-ADServiceAccount answers the question that actually matters: can THIS machine
+            # retrieve the password? It needs elevation, and it stays false until the host has a
+            # Kerberos ticket reflecting its membership of whatever group is in
+            # PrincipalsAllowedToRetrieveManagedPassword - which in practice means a reboot after
+            # being added.
+            $gmsaState = Get-PSTSMGmsaState -Identity $leaf
+
+            if (-not $gmsaState.Exists) {
                 Add-PSTSMCheck 'GMSA_MISSING' 'Error' 'gMSA not found in the directory' `
                     "No managed service account matching '$leaf' could be read." `
                     'Check the name, or create it first. Note gMSA names are unique per FOREST, not per domain.'
             }
             else {
-                # Test-ADServiceAccount answers the question that actually matters: can THIS
-                # machine retrieve the password? It needs elevation, and it stays false until
-                # the host has a Kerberos ticket reflecting its membership of whatever group is
-                # in PrincipalsAllowedToRetrieveManagedPassword - which in practice means a
-                # reboot after being added.
-                $usable = $null
-                try { $usable = Test-ADServiceAccount -Identity $leaf.TrimEnd('$') -ErrorAction Stop }
-                catch { Write-Verbose "Test-ADServiceAccount failed: $($_.Exception.Message)" }
+                $usable = $gmsaState.Usable
 
                 if ($usable -eq $true) {
                     Add-PSTSMCheck 'GMSA_OK' 'Ok' 'This machine can use the gMSA' "$gmsa is installed and retrievable here." $null
