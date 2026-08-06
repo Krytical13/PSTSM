@@ -415,10 +415,15 @@ Do not "tidy" any of them without re-running the experiment.
 `ConvertTo-PSTSMArgument`, `ConvertTo-PSTSMQuotedValue`, `Export-PSTSMPlan`,
 `Import-PSTSMPlan`
 
-**Task Scheduler** — `Get-PSTSMInventory`, `Register-PSTSMPlan`, `New-PSTSMLogWrapper`,
-`ConvertFrom-PSTSMDefinition`, `ConvertFrom-PSTSMAction`, `ConvertTo-PSTSMCimTrigger`,
-`ConvertFrom-PSTSMCimTrigger`, `ConvertFrom-PSTSMDuration`, `ConvertFrom-PSTSMResultCode`,
-`ConvertFrom-PSTSMTriggerSummary`, `Invoke-PSTSMTestRun`
+**Task Scheduler** — `Get-PSTSMInventory`, `Register-PSTSMPlan`, `Update-PSTSMTaskSchedule`,
+`New-PSTSMLogWrapper`, `ConvertFrom-PSTSMDefinition`, `ConvertFrom-PSTSMAction`,
+`ConvertTo-PSTSMCimTrigger`, `ConvertFrom-PSTSMCimTrigger`, `ConvertFrom-PSTSMDuration`,
+`ConvertFrom-PSTSMResultCode`, `ConvertFrom-PSTSMTriggerSummary`, `Invoke-PSTSMTestRun`
+
+`Update-PSTSMTaskSchedule` is the counterpart to `Register-PSTSMPlan` for a task whose action
+PSTSM will not rewrite. It applies triggers, settings and principal to an already-registered task
+and leaves the action out of the write entirely, so a COM-handler or multi-action task can still
+be rescheduled. It edits only — it will not create.
 
 **Health, origin and run logs** — `Test-PSTSMHealth`, `Get-PSTSMTaskOrigin`,
 `Get-PSTSMTaskRunLog`

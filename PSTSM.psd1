@@ -39,6 +39,9 @@
         'Test-PSTSMHealth'
         'Get-PSTSMTaskRunLog'
         'Register-PSTSMPlan'
+        # Edits an existing task's schedule in place, leaving its action untouched. The way to
+        # change "run at 2am" on a task whose action PSTSM deliberately will not rewrite.
+        'Update-PSTSMTaskSchedule'
         'Invoke-PSTSMElevatedRegistration'
         # Start-PSTSMBrokerProcess is deliberately NOT exported. It is the impure seam the broker
         # tests mock, and Mock -ModuleName reaches module-internal functions without needing it
