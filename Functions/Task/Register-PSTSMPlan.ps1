@@ -60,27 +60,44 @@ function Register-PSTSMPlan {
         }
 
         # --- action ------------------------------------------------------------------------
-        $targetScript = $Plan.ScriptPath
-        if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript') {
-            $targetScript = New-PSTSMLogWrapper -Plan $Plan
-            Write-Verbose "Action targets log wrapper: $targetScript"
+        # An 'Executable' plan is a bare command line - something that is not a .ps1 behind a
+        # PowerShell host, or a host invoked with inline -Command. Its three fields go through
+        # untouched: no wrapper, no argument generation, no re-quoting. Whatever the operator saw
+        # in the form is exactly what gets registered, which is the only honest way to re-save an
+        # action this tool did not build.
+        if ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind -eq 'Executable') {
+            $actionParams = @{
+                Execute = [string]$Plan.RawAction.Execute
+            }
+            # Passed only when non-empty: New-ScheduledTaskAction writes an empty <Arguments/>
+            # element for an empty string, which is a difference from a task that never had one.
+            if ($Plan.RawAction.Arguments) { $actionParams['Argument'] = [string]$Plan.RawAction.Arguments }
+            if ($Plan.RawAction.WorkingDirectory) { $actionParams['WorkingDirectory'] = [string]$Plan.RawAction.WorkingDirectory }
+            $action = New-ScheduledTaskAction @actionParams
         }
+        else {
+            $targetScript = $Plan.ScriptPath
+            if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript') {
+                $targetScript = New-PSTSMLogWrapper -Plan $Plan
+                Write-Verbose "Action targets log wrapper: $targetScript"
+            }
 
-        $argumentString = ConvertTo-PSTSMArgument -ScriptPath $targetScript `
-            -Parameters $Plan.Parameters `
-            -ExtraArguments $Plan.ExtraArguments `
-            -ExecutionPolicy $Plan.ExecutionPolicy `
-            -NoProfile $Plan.NoProfile `
-            -NonInteractive $Plan.NonInteractive `
-            -WindowStyle $Plan.WindowStyle `
-            -SwitchDefaultTrue $Plan.SwitchDefaultTrue
+            $argumentString = ConvertTo-PSTSMArgument -ScriptPath $targetScript `
+                -Parameters $Plan.Parameters `
+                -ExtraArguments $Plan.ExtraArguments `
+                -ExecutionPolicy $Plan.ExecutionPolicy `
+                -NoProfile $Plan.NoProfile `
+                -NonInteractive $Plan.NonInteractive `
+                -WindowStyle $Plan.WindowStyle `
+                -SwitchDefaultTrue $Plan.SwitchDefaultTrue
 
-        $actionParams = @{
-            Execute  = $Plan.EnginePath
-            Argument = $argumentString
+            $actionParams = @{
+                Execute  = $Plan.EnginePath
+                Argument = $argumentString
+            }
+            if ($Plan.WorkingDirectory) { $actionParams['WorkingDirectory'] = $Plan.WorkingDirectory }
+            $action = New-ScheduledTaskAction @actionParams
         }
-        if ($Plan.WorkingDirectory) { $actionParams['WorkingDirectory'] = $Plan.WorkingDirectory }
-        $action = New-ScheduledTaskAction @actionParams
 
         # --- triggers ----------------------------------------------------------------------
         $triggers = @()

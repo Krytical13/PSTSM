@@ -64,15 +64,85 @@ function Test-PSTSMPlan {
             })
     }
 
+    # An 'Executable' plan has no .ps1 behind it - it is a bare command line, which is all Task
+    # Scheduler itself models for such an action. Every check below that reads the script or the
+    # PowerShell host would be answering a question this plan does not raise, so those are skipped
+    # and the ones that still apply - principal, elevation, triggers, settings, name collision -
+    # run exactly as they do for a script plan.
+    $isExecPlan = ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind -eq 'Executable')
+
+    if ($isExecPlan) {
+        $exePath = [string]$Plan.RawAction.Execute
+        if ([string]::IsNullOrWhiteSpace($exePath)) {
+            Add-PSTSMCheck 'PROGRAM_MISSING' 'Error' 'No program to run' `
+                'The action has an empty Execute value.' `
+                'Give the full path to the program this task should run.'
+        }
+        else {
+            # Resolved the way Task Scheduler will resolve it: an unquoted bare name is looked up
+            # on PATH at run time, so "robocopy.exe" is legitimate and must not be called missing.
+            $bare = $exePath.Trim('"', ' ')
+            $found = if ([System.IO.Path]::IsPathRooted($bare)) { Test-Path -LiteralPath $bare -PathType Leaf }
+            else { [bool](Get-Command -Name $bare -CommandType Application -ErrorAction SilentlyContinue) }
+            if ($found) {
+                Add-PSTSMCheck 'PROGRAM_OK' 'Ok' 'Program resolved' $bare $null
+            }
+            else {
+                Add-PSTSMCheck 'PROGRAM_MISSING' 'Warning' 'Program not found on this machine' `
+                    "Nothing at '$bare', and it is not on PATH here." `
+                    ('A warning rather than an error: the task runs on whatever machine it is registered on, ' +
+                    'and that machine may well have it. Confirm the path is right there.')
+            }
+        }
+
+        # The working directory is deliberately NOT checked here - WORKDIR below already reads
+        # $Plan.WorkingDirectory, which carries the same value for this plan shape, and two
+        # findings for one missing folder is worse than none.
+
+        # A stand-in profile so the shared sections below can read Signals and Parameters without
+        # each having to know that no script was ever parsed. It mirrors Get-PSTSMScriptProfile's
+        # shape exactly - property names included, because a typo here reads as $null and
+        # '-not $null' is $true, which would fire the very warnings this exists to suppress.
+        #
+        # Empty is the truthful value: nothing was examined, so nothing was found. HasExitStatement
+        # is the one that must be $true - a program's exit code is its own business, and Task
+        # Scheduler records whatever it returns.
+        $ScriptProfile = [PSCustomObject]@{
+            Parameters        = @()
+            HasParameters     = $false
+            IsParseable       = $true
+            IsReadable        = $true
+            ParseErrors       = @()
+            RequiresElevation = $false
+            RequiredVersion   = $null
+            RequiredEditions  = @()
+            RequiredModules   = @()
+            ConfigFiles       = @()
+            Signals           = [PSCustomObject]@{
+                InteractiveCommands = @()
+                NetworkCommands     = @()
+                UncPaths            = @()
+                DpapiCommands       = @()
+                HasExitStatement    = $true
+                UsesGui             = $false
+                CommandNames        = @()
+            }
+            Encoding          = [PSCustomObject]@{
+                HasBom      = $true
+                HasNonAscii = $false
+            }
+        }
+    }
+
     # --- script present and parseable ---------------------------------------------------
-    if (-not (Test-Path -LiteralPath $Plan.ScriptPath -PathType Leaf)) {
+    if (-not $isExecPlan -and -not (Test-Path -LiteralPath $Plan.ScriptPath -PathType Leaf)) {
         Add-PSTSMCheck 'SCRIPT_MISSING' 'Error' 'Script not found' `
             "No file at $($Plan.ScriptPath)." `
             'Pick the script again, or move it to a path the scheduled account can read.'
         return $results.ToArray()
     }
 
-    if (-not $ScriptProfile) {
+    if (-not $ScriptProfile -and -not $isExecPlan) {
         $ScriptProfile = Get-PSTSMScriptProfile -Path $Plan.ScriptPath -DefaultEngineId $Plan.EngineId
     }
 
@@ -95,7 +165,12 @@ function Test-PSTSMPlan {
     }
 
     # --- engine ------------------------------------------------------------------------
-    if (-not $Plan.EnginePath -or -not (Test-Path -LiteralPath $Plan.EnginePath -PathType Leaf)) {
+    # Skipped for an executable plan: there is no PowerShell host in the picture, and the program
+    # it does run was already resolved above under PROGRAM_OK / PROGRAM_MISSING.
+    if ($isExecPlan) {
+        # nothing - see PROGRAM_OK above
+    }
+    elseif (-not $Plan.EnginePath -or -not (Test-Path -LiteralPath $Plan.EnginePath -PathType Leaf)) {
         Add-PSTSMCheck 'ENGINE_MISSING' 'Error' 'PowerShell engine not found' `
             "No executable at '$($Plan.EnginePath)'." `
             'Choose an engine that exists on the machine this task will run on.'

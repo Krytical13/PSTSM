@@ -444,13 +444,35 @@ Splitting the handlers into separate functions would break them at runtime, not 
 
 ## Round-trip safety
 
-`ConvertFrom-PSTSMDefinition` sets `IsFullyRecognized = $false` and preserves the original
-`Execute`/`Arguments` in `RawAction` when a task was built some other way — inline `-Command`
-code, a non-PowerShell action, or multiple actions. The editor then shows that action **read-only
-and disables Save**, so the task can be inspected but not rewritten. Silently reshaping somebody's
-working task into our preferred form is how you break production, and an editable free-text box
-would be the same mistake with extra steps: it invites exactly the rewrite the guarantee exists
-to prevent. Change those in Task Scheduler, or rebuild them here deliberately.
+`ConvertFrom-PSTSMDefinition` reports an `ActionKind`, and that decides how much of a task the
+editor will let you change:
+
+| `ActionKind` | What it is | Editable |
+|---|---|---|
+| `PowerShellScript` | One exec action that parses back to a `.ps1` | Everything — the script, its parameters, the schedule |
+| `Executable` | One exec action that does not: `robocopy.exe`, a `.cmd`, or a host invoked with inline `-Command` | Program, Arguments, Start in — plus the schedule |
+| `Unsupported` | No command line to preserve (a COM handler), or more actions than one plan holds | Nothing. Shown read-only |
+
+The rule is unchanged: **PSTSM never silently reshapes an action into its preferred form.** What
+changed is the recognition that this rule was being applied far more widely than it needed to be.
+`IsFullyRecognized` was false for four unrelated reasons, and the editor locked completely on any
+of them — so a task running `robocopy.exe` could not have its *schedule* changed, even though such
+an action is strictly simpler than the ones the tool does model.
+
+An `Executable` action is not a degraded `PowerShellScript`. Task Scheduler's own model for it is
+exactly `Execute` + `Arguments` + `WorkingDirectory`, and all three are carried verbatim in
+`RawAction`. Editing writes back the exact strings shown, re-quoting nothing — which is a
+*stricter* guarantee than the PowerShell path, where the argument string is regenerated from
+parsed parameters. What that kind lacks is the script-parameter layer above the command line, not
+fidelity to the task underneath it.
+
+This is not the "editable free-text box" an earlier version of this section warned against. That
+warning was about offering a raw arguments box on a *PowerShell* task, where PSTSM would then
+re-quote what you typed and the round trip could lose. Here PSTSM is not a party to the string at
+all.
+
+`IsFullyRecognized` is still published and still means what it always did — "does the script and
+parameters form apply" — so anything reading it keeps working.
 
 ## Tests
 

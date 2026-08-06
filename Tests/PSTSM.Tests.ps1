@@ -921,6 +921,58 @@ Describe 'Editing existing tasks of every shape' {
         $plan.RawAction.Execute | Should -Not -BeNullOrEmpty
         $plan.RawAction.Summary | Should -Match ([regex]::Escape((Split-Path $t.Actions[0].Execute -Leaf)))
     }
+
+    It 'calls a single non-PowerShell exec action Executable, not Unsupported' {
+        # The distinction the whole ActionKind split exists for. Such an action is not a degraded
+        # PowerShell task - it is the exact shape Task Scheduler itself models, so all three of its
+        # fields round-trip and there is nothing to protect the operator from.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                $a = @($_.Actions)[0]
+                @($_.Actions).Count -eq 1 -and
+                $a.CimClass.CimClassName -eq 'MSFT_TaskExecAction' -and $a.Execute -and $a.Execute -notmatch '(?i)powershell|pwsh'
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no non-PowerShell exec task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.ActionKind | Should -Be 'Executable'
+        $plan.RawAction.Execute | Should -BeExactly ([string]@($t.Actions)[0].Execute)
+        $plan.RawAction.Arguments | Should -BeExactly ([string]@($t.Actions)[0].Arguments)
+    }
+
+    It 'calls an action with no command line Unsupported' {
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+                Where-Object { @($_.Actions)[0].CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction' })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no COM-handler task on this machine'; return }
+
+        (ConvertFrom-PSTSMDefinition -Task $t).ActionKind | Should -Be 'Unsupported'
+    }
+
+    It 'calls a task with more actions than the plan holds Unsupported' {
+        # Only the first action is modelled, so re-registering through the plan would drop the
+        # rest. That is a real loss and stays blocked, unlike the exec case above.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { @($_.Actions).Count -gt 1 })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no multi-action task on this machine'; return }
+
+        (ConvertFrom-PSTSMDefinition -Task $t).ActionKind | Should -Be 'Unsupported'
+    }
+
+    It 'preflights an Executable plan without inventing PowerShell problems' {
+        # The stand-in profile Test-PSTSMPlan builds for this kind has to mirror the real one's
+        # property names exactly. A typo there reads as $null, '-not $null' is $true, and the very
+        # warnings it exists to suppress fire anyway - silently, and only for this action kind.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                $a = @($_.Actions)[0]
+                @($_.Actions).Count -eq 1 -and
+                $a.CimClass.CimClassName -eq 'MSFT_TaskExecAction' -and $a.Execute -and $a.Execute -notmatch '(?i)powershell|pwsh'
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no non-PowerShell exec task on this machine'; return }
+
+        $checks = @(Test-PSTSMPlan -Plan (ConvertFrom-PSTSMDefinition -Task $t) -SkipExistingTaskCheck)
+        $ids = @($checks | ForEach-Object { $_.Id })
+        foreach ($scriptOnly in 'SCRIPT_MISSING', 'SCRIPT_PARSE', 'SCRIPT_UNREADABLE', 'ENGINE_MISSING', 'EXIT_CODE', 'ENCODING') {
+            $ids | Should -Not -Contain $scriptOnly
+        }
+    }
 }
 
 Describe 'Register-PSTSMPlan password handling' {

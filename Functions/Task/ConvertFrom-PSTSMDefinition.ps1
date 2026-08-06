@@ -203,8 +203,36 @@ function ConvertFrom-PSTSMDefinition {
             }
 
             # Round-trip safety. A single executable action that parses back to a .ps1 is the
-            # only shape that can be re-saved without rewriting somebody's working task.
+            # only shape that can be re-saved through the SCRIPT model without rewriting
+            # somebody's working task. Kept as-is: callers and tests read it as "does the
+            # script-and-parameters form apply", which is still exactly what it answers.
             IsFullyRecognized = [bool]($parsed.IsRecognized -and $isExec -and $realActions.Count -eq 1)
+
+            # How much of the action can be edited, which is a finer question than the flag above
+            # and the reason this exists. IsFullyRecognized was false for four unrelated causes,
+            # and the editor locked completely on any of them - including on tasks that are
+            # simpler than the ones it does model.
+            #
+            #   PowerShellScript - single exec action that parses back to a .ps1. The full
+            #                      script + parameters form applies.
+            #   Executable       - single exec action that does not (robocopy.exe, a .cmd, or
+            #                      powershell.exe with inline -Command). There is nothing lossy
+            #                      here: Task Scheduler's own model for such an action IS
+            #                      Execute + Arguments + WorkingDirectory, all three of which are
+            #                      carried verbatim in RawAction. What is missing is the
+            #                      script-parameter layer above it, not fidelity. Editing writes
+            #                      back the exact strings shown - PSTSM re-quotes nothing, which
+            #                      makes this a stricter guarantee than the PowerShell path, where
+            #                      the argument string is reconstructed from parsed parameters.
+            #   Unsupported      - no command line exists to preserve (a COM handler), or there
+            #                      are more actions than this plan shape holds. Re-registering
+            #                      through the plan would drop something, so the action stays
+            #                      read-only and only the schedule around it can be edited.
+            ActionKind        = $(
+                if ($parsed.IsRecognized -and $isExec -and $realActions.Count -eq 1) { 'PowerShellScript' }
+                elseif ($isExec -and $realActions.Count -eq 1 -and $action.Execute) { 'Executable' }
+                else { 'Unsupported' }
+            )
             ActionType        = $actionClass
             RawAction         = [ordered]@{
                 Execute          = [string]$(if ($isExec) { $action.Execute })

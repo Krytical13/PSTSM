@@ -70,7 +70,12 @@ function Show-PSTSMEditor {
         Suspend       = $true      # blocks refresh while controls are being populated
         SavedPlan     = $null
         IsEdit        = [bool]$Plan
-        Locked        = $false     # existing task whose action we must not rewrite
+        # 'PowerShellScript' (the full script + parameters form), 'Executable' (a bare command
+        # line, edited as three verbatim fields), or 'Unsupported' (an action with no command line
+        # to preserve, or more actions than the plan shape holds). A new task is always the first.
+        ActionKind    = 'PowerShellScript'
+        Locked        = $false     # action cannot be rewritten - only the schedule around it
+        BasePlan      = $null      # the loaded plan, kept whole so Executable edits overlay it
         OriginalName  = $null
         OriginalPath  = $null
         # Read once. A session cannot gain an administrator token while it runs, so re-asking on
@@ -90,7 +95,21 @@ function Show-PSTSMEditor {
         $state.Triggers = @($Plan.Triggers)
         $state.OriginalName = $Plan.TaskName
         $state.OriginalPath = $Plan.TaskPath
-        if ($Plan.PSObject.Properties['IsFullyRecognized'] -and -not $Plan.IsFullyRecognized) { $state.Locked = $true }
+        $state.BasePlan = $Plan
+
+        # ActionKind, not IsFullyRecognized. The old flag was false for four unrelated reasons and
+        # this window locked entirely on any of them - so "change the schedule on my robocopy task"
+        # was refused, even though that action is simpler than the ones the tool does model.
+        # Only Unsupported still locks, and now it locks the ACTION rather than the whole form.
+        if ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind) {
+            $state.ActionKind = [string]$Plan.ActionKind
+        }
+        elseif ($Plan.PSObject.Properties['IsFullyRecognized'] -and -not $Plan.IsFullyRecognized) {
+            # A plan from an older export, which predates ActionKind. Treat it the way it was
+            # treated then rather than guessing it is safe to edit.
+            $state.ActionKind = 'Unsupported'
+        }
+        $state.Locked = ($state.ActionKind -eq 'Unsupported')
     }
 
     # Product name first, then what this window is doing. Consistent across every window so the
@@ -412,7 +431,71 @@ function Show-PSTSMEditor {
 
     # Reads the current control values into a plan. Single source of truth is the controls,
     # so the preview can never drift from what Save would register.
+    # Collects the settings the form controls, over whatever the task already had. Shared by both
+    # plan shapes: an executable task has exactly the same reliability settings as a script one.
+    $collectSettings = {
+        $s = @{}
+        if ($state.Settings) {
+            foreach ($k in $state.Settings.Keys) { $s[$k] = $state.Settings[$k] }
+        }
+        $s['MultipleInstances'] = [string]$cboInstances.SelectedItem
+        $s['StartWhenAvailable'] = $chkStartWhenAvail.Checked
+        $s['ExecutionTimeLimit'] = $txtTimeLimit.Text.Trim()
+        $s['RestartInterval'] = $txtRestartInterval.Text.Trim()
+        $s['DisallowStartIfOnBatteries'] = $chkBatteryStop.Checked
+        $s['StopIfGoingOnBatteries'] = $chkBatteryStop.Checked
+        $s['RunOnlyIfNetworkAvailable'] = $chkNetwork.Checked
+        $s['WakeToRun'] = $chkWake.Checked
+        $s['Hidden'] = $chkHidden.Checked
+        if (-not $s.ContainsKey('RestartCount')) { $s['RestartCount'] = 0 }
+        $rc = 0
+        if ([int]::TryParse($txtRestartCount.Text.Trim(), [ref]$rc)) { $s['RestartCount'] = $rc }
+        $s
+    }
+
+    # An executable task has no script to profile, so New-PSTSMPlan cannot build it - that command
+    # starts from a .ps1 by definition. The loaded plan already has the right shape, so the form
+    # overlays onto a copy of it.
+    #
+    # The three command-line fields go across as typed. Nothing here re-quotes, re-parses or
+    # regenerates them, which is the whole guarantee for this action kind: what was read from the
+    # task is what goes back unless the operator changed it themselves.
+    $buildExecPlan = {
+        if (-not $state.BasePlan) { return $null }
+
+        # Shallow copy, then replace every nested container this touches. Mutating them in place
+        # would edit the plan the window was opened with, so Cancel would not actually cancel.
+        $p = $state.BasePlan.PSObject.Copy()
+
+        $p.TaskName = $txtName.Text.Trim()
+        $p.TaskPath = $(if ($txtFolder.Text.Trim()) { $txtFolder.Text.Trim() } else { '\' })
+        $p.Description = $txtDesc.Text
+
+        $p.RawAction = [ordered]@{
+            Execute          = $txtScript.Text.Trim()
+            Arguments        = $txtExtraArgs.Text
+            WorkingDirectory = $txtWorkDir.Text.Trim()
+            Summary          = (@($txtScript.Text.Trim(), $txtExtraArgs.Text) | Where-Object { $_ }) -join ' '
+        }
+        # Kept in step with RawAction: Test-PSTSMPlan's WORKDIR check reads this one.
+        $p.WorkingDirectory = $txtWorkDir.Text.Trim()
+
+        $p.Principal = [ordered]@{
+            UserId    = $(if ($txtUser.Text.Trim()) { $txtUser.Text.Trim() } else { $state.BasePlan.Principal.UserId })
+            LogonType = (& $getLogonType)
+            RunLevel  = $(if ($chkHighest.Checked) { 'Highest' } else { 'Limited' })
+        }
+
+        $p.Settings = (& $collectSettings)
+        $p.Triggers = @($state.Triggers)
+        # No wrapper for a program: transcript logging works by re-pointing the action at a
+        # generated .ps1, which would replace the very command line this kind exists to preserve.
+        $p.Logging = [ordered]@{ Mode = 'None'; Directory = $null; RetentionDays = 30 }
+        $p
+    }
+
     $buildPlan = {
+        if ($state.ActionKind -eq 'Executable') { return & $buildExecPlan }
         if (-not $state.Profile) { return $null }
 
         $params = [ordered]@{}
@@ -453,22 +536,7 @@ function Show-PSTSMEditor {
         # Compatibility - so opening an existing task and pressing Save silently reset five
         # settings to New-PSTSMPlan's defaults. This is also what $state.Settings is for; it was
         # being seeded from the plan and then never read.
-        $settings = @{}
-        if ($state.Settings) {
-            foreach ($k in $state.Settings.Keys) { $settings[$k] = $state.Settings[$k] }
-        }
-        $settings['MultipleInstances'] = [string]$cboInstances.SelectedItem
-        $settings['StartWhenAvailable'] = $chkStartWhenAvail.Checked
-        $settings['ExecutionTimeLimit'] = $txtTimeLimit.Text.Trim()
-        $settings['RestartInterval'] = $txtRestartInterval.Text.Trim()
-        $settings['DisallowStartIfOnBatteries'] = $chkBatteryStop.Checked
-        $settings['StopIfGoingOnBatteries'] = $chkBatteryStop.Checked
-        $settings['RunOnlyIfNetworkAvailable'] = $chkNetwork.Checked
-        $settings['WakeToRun'] = $chkWake.Checked
-        $settings['Hidden'] = $chkHidden.Checked
-        if (-not $settings.ContainsKey('RestartCount')) { $settings['RestartCount'] = 0 }
-        $rc = 0
-        if ([int]::TryParse($txtRestartCount.Text.Trim(), [ref]$rc)) { $settings['RestartCount'] = $rc }
+        $settings = & $collectSettings
 
         $retain = 30
         if (-not [int]::TryParse($txtLogRetain.Text.Trim(), [ref]$retain)) { $retain = 30 }
@@ -1302,6 +1370,47 @@ function Show-PSTSMEditor {
     $state.Suspend = $false
     & $fitLeftPane
     & $refreshTriggers
+
+    if ($state.ActionKind -eq 'Executable') {
+        # A bare command line. Task Scheduler's own model for this action is exactly three fields,
+        # and all three are here and editable - so this round-trips more strictly than the script
+        # form does, because nothing is regenerated from parsed pieces.
+        $state.Suspend = $true
+
+        $secScript.Header.Text = 'Program'
+        $lblDerived.Text = 'This task runs a program directly rather than a PowerShell script. ' +
+        'The three fields below are written back exactly as you leave them.'
+        $lblDerived.Visible = $true
+
+        $txtScript.Text = [string]$Plan.RawAction.Execute
+        $txtExtraArgs.Text = [string]$Plan.RawAction.Arguments
+        $txtWorkDir.Text = [string]$Plan.RawAction.WorkingDirectory
+
+        # Browse filters for .ps1, which is the wrong picker for a program.
+        $btnBrowseScript.Visible = $false
+
+        # Everything that only means something to a PowerShell host. Left visible but disabled, so
+        # it stays obvious WHY the option is unavailable rather than the section quietly changing
+        # shape between task types.
+        foreach ($c in @($cboEngine, $cboExecPolicy, $cboWindowStyle, $chkNoProfile, $chkNonInteractive,
+                $cboLogging, $txtLogDir, $txtLogRetain)) {
+            if ($c) { $c.Enabled = $false }
+        }
+
+        $paramHost.Controls.Clear()
+        $noParams = New-PSTSMUILabel -Text 'Arguments for a program are a single command line, edited above.' -ForeColor $t.Muted
+        Add-PSTSMUIStacked -Stack $paramHost -Control $noParams
+
+        # Test-run builds and runs a PowerShell command line, which is not what this action is.
+        # Running an arbitrary program on the operator's behalf is a different promise than this
+        # button makes elsewhere, so it is not offered here.
+        $btnTest.Enabled = $false
+        $tipTest = New-Object System.Windows.Forms.ToolTip
+        $tipTest.SetToolTip($btnTest, 'Test-run applies to PowerShell scripts. Use Run in the main window to start this task.')
+
+        $state.Suspend = $false
+        & $refresh
+    }
 
     if ($state.Locked) {
         # Read-only view. Say what the task actually runs - for a COM handler there is no
