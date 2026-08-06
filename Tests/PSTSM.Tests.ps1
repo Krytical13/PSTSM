@@ -2445,6 +2445,19 @@ Describe 'Highest privileges that would achieve nothing' {
         # consumes it would have been permanently silent - a dead check that looks alive.
         #
         # This asserts the lookup itself works, independently of who happens to be in the group.
+
+        # Except on a domain controller, which HAS no local SAM: BUILTIN\Administrators is a
+        # directory group there and Get-LocalGroup reports S-1-5-32-544 as not found. The function
+        # under test already handles that - it catches and answers "unknown", which is the honest
+        # answer when the machine cannot be asked - so it is this assertion that does not hold,
+        # not the behaviour. Found by running the suite on a real DC.
+        $role = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).DomainRole
+        if ($role -in 4, 5) {
+            Test-PSTSMPrincipalIsAdministrator -UserId 'S-1-5-32-544' | Should -BeNullOrEmpty -Because 'a DC has no local group to read, and "unknown" is the honest answer'
+            Set-ItResult -Skipped -Because 'domain controllers have no local Administrators group'
+            return
+        }
+
         { Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop | Get-LocalGroupMember -ErrorAction Stop } |
             Should -Not -Throw
 
