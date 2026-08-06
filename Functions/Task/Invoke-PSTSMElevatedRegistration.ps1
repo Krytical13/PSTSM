@@ -171,6 +171,9 @@ function Invoke-PSTSMElevatedRegistration {
         leave the original registration behind.
     .PARAMETER RemoveTaskPath
         Folder of -RemoveTaskName.
+    .PARAMETER ScheduleOnly
+        Apply the plan's schedule to an already-registered task and leave its action untouched,
+        instead of replacing the whole task. For an action PSTSM will not rewrite.
     .PARAMETER TimeoutSeconds
         How long to wait for the helper. The default is generous because the operator may be
         typing a password into it.
@@ -191,6 +194,8 @@ function Invoke-PSTSMElevatedRegistration {
         [string]$RemoveTaskName,
 
         [string]$RemoveTaskPath,
+
+        [switch]$ScheduleOnly,
 
         [ValidateRange(5, 3600)]
         [int]$TimeoutSeconds = 600,
@@ -249,6 +254,7 @@ function Invoke-PSTSMElevatedRegistration {
         # ConsolePrompting registry value, so this cannot rely on it being a dialog.
         $needsPassword = $Plan.Principal.LogonType -eq 'Password'
         if ($needsPassword) { $helperArgs += '-PromptForPassword' }
+        if ($ScheduleOnly) { $helperArgs += '-ScheduleOnly' }
         if ($RemoveTaskName) {
             $helperArgs += @('-RemoveTaskName', $RemoveTaskName)
             if ($RemoveTaskPath) { $helperArgs += @('-RemoveTaskPath', $RemoveTaskPath) }

@@ -69,9 +69,14 @@ function Test-PSTSMPlan {
     # PowerShell host would be answering a question this plan does not raise, so those are skipped
     # and the ones that still apply - principal, elevation, triggers, settings, name collision -
     # run exactly as they do for a script plan.
-    $isExecPlan = ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind -eq 'Executable')
+    $kind = if ($Plan.PSObject.Properties['ActionKind']) { [string]$Plan.ActionKind } else { 'PowerShellScript' }
+    $isExecPlan = ($kind -in 'Executable', 'Unsupported')
 
-    if ($isExecPlan) {
+    # Only Executable has a command line to check. Unsupported is here for the other half of the
+    # rule - it skips the script checks too, because it has no script either, and reporting
+    # "script not found" for a COM handler would block a schedule edit over a file that was never
+    # meant to exist.
+    if ($kind -eq 'Executable') {
         $exePath = [string]$Plan.RawAction.Execute
         if ([string]::IsNullOrWhiteSpace($exePath)) {
             Add-PSTSMCheck 'PROGRAM_MISSING' 'Error' 'No program to run' `
@@ -98,7 +103,9 @@ function Test-PSTSMPlan {
         # The working directory is deliberately NOT checked here - WORKDIR below already reads
         # $Plan.WorkingDirectory, which carries the same value for this plan shape, and two
         # findings for one missing folder is worse than none.
+    }
 
+    if ($isExecPlan) {
         # A stand-in profile so the shared sections below can read Signals and Parameters without
         # each having to know that no script was ever parsed. It mirrors Get-PSTSMScriptProfile's
         # shape exactly - property names included, because a typo here reads as $null and

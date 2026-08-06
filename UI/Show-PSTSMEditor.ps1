@@ -471,14 +471,18 @@ function Show-PSTSMEditor {
         $p.TaskPath = $(if ($txtFolder.Text.Trim()) { $txtFolder.Text.Trim() } else { '\' })
         $p.Description = $txtDesc.Text
 
-        $p.RawAction = [ordered]@{
-            Execute          = $txtScript.Text.Trim()
-            Arguments        = $txtExtraArgs.Text
-            WorkingDirectory = $txtWorkDir.Text.Trim()
-            Summary          = (@($txtScript.Text.Trim(), $txtExtraArgs.Text) | Where-Object { $_ }) -join ' '
+        if ($state.ActionKind -eq 'Executable') {
+            $p.RawAction = [ordered]@{
+                Execute          = $txtScript.Text.Trim()
+                Arguments        = $txtExtraArgs.Text
+                WorkingDirectory = $txtWorkDir.Text.Trim()
+                Summary          = (@($txtScript.Text.Trim(), $txtExtraArgs.Text) | Where-Object { $_ }) -join ' '
+            }
+            # Kept in step with RawAction: Test-PSTSMPlan's WORKDIR check reads this one.
+            $p.WorkingDirectory = $txtWorkDir.Text.Trim()
         }
-        # Kept in step with RawAction: Test-PSTSMPlan's WORKDIR check reads this one.
-        $p.WorkingDirectory = $txtWorkDir.Text.Trim()
+        # Unsupported: the action is not on screen and not in the write. Carried through untouched
+        # so nothing downstream has to special-case a plan with a missing one.
 
         $p.Principal = [ordered]@{
             UserId    = $(if ($txtUser.Text.Trim()) { $txtUser.Text.Trim() } else { $state.BasePlan.Principal.UserId })
@@ -495,7 +499,10 @@ function Show-PSTSMEditor {
     }
 
     $buildPlan = {
-        if ($state.ActionKind -eq 'Executable') { return & $buildExecPlan }
+        # Both non-script kinds build from the loaded plan rather than from a script profile:
+        # Executable edits its command line, Unsupported carries it through untouched. Neither has
+        # a .ps1 for New-PSTSMPlan to start from.
+        if ($state.ActionKind -in 'Executable', 'Unsupported') { return & $buildExecPlan }
         if (-not $state.Profile) { return $null }
 
         $params = [ordered]@{}
@@ -728,7 +735,10 @@ function Show-PSTSMEditor {
         # "Cannot save" - which is the wrong job for a control: a button should say what happens
         # when you press it, and keep saying it through the whole flow. The count belongs to the
         # thing being counted, so it goes on the Preflight heading instead.
-        $btnSave.Enabled = ($errorCount -eq 0) -and (-not $state.Locked)
+        # $state.Locked no longer disables Save. It means the ACTION cannot be rewritten, and the
+        # save path honours that by editing the registered task in place instead of replacing it -
+        # so the schedule, settings and run-as account are still savable.
+        $btnSave.Enabled = ($errorCount -eq 0)
 
         $warnCount = @($checks | Where-Object { $_.Severity -eq 'Warning' }).Count
         $summary = @()
@@ -742,7 +752,7 @@ function Show-PSTSMEditor {
         # A disabled control with no stated reason is a dead end, so say why in a tooltip.
         $tipSave = New-Object System.Windows.Forms.ToolTip
         if ($state.Locked) {
-            $tipSave.SetToolTip($btnSave, "This task's action was not built by PSTSM and cannot be modelled safely, so saving would rewrite it. Edit it in Task Scheduler instead.")
+            $tipSave.SetToolTip($btnSave, "Saves the schedule, settings and run-as account. This task's action cannot be modelled by PSTSM, so it is left exactly as it is - change that in Task Scheduler.")
         }
         elseif ($errorCount -gt 0) {
             $tipSave.SetToolTip($btnSave, "Fix the $errorCount blocking issue$(if ($errorCount -ne 1) { 's' }) listed under Preflight first.")
@@ -1126,6 +1136,24 @@ function Show-PSTSMEditor {
             $renamed = $state.IsEdit -and
                        (($state.OriginalName -ne $plan.TaskName) -or ($state.OriginalPath -ne $plan.TaskPath))
 
+            # An Unsupported action cannot be re-created from the plan, which is the whole reason
+            # this mode exists - so the save edits the registered task in place instead.
+            $scheduleOnly = ($state.ActionKind -eq 'Unsupported')
+
+            if ($scheduleOnly -and $renamed) {
+                # Renaming means create-then-delete, and the "create" half would have to rebuild an
+                # action nothing here can rebuild. Refused explicitly rather than half-done: the
+                # alternative is a new task missing the action and the original deleted.
+                [System.Windows.Forms.MessageBox]::Show(
+                    ("This task's action cannot be re-created by PSTSM, so it can only be edited where it is - " +
+                    "renaming or moving it would mean building a new task around an action this tool cannot model.`n`n" +
+                    "Put the name and folder back to '$($state.OriginalPath)$($state.OriginalName)' to save your other changes, " +
+                    'or rename it in Task Scheduler.'),
+                    'Cannot rename this task', [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+
             $needsElevation = @(Test-PSTSMPlanNeedsElevation -Plan $plan).Count -gt 0
 
             if ($needsElevation -and -not $state.IsElevated) {
@@ -1137,6 +1165,7 @@ function Show-PSTSMEditor {
                 $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
                 try {
                     $elevArgs = @{ Plan = $plan; Confirm = $false }
+                    if ($scheduleOnly) { $elevArgs['ScheduleOnly'] = $true }
                     if ($renamed) {
                         $elevArgs['RemoveTaskName'] = $state.OriginalName
                         $elevArgs['RemoveTaskPath'] = $state.OriginalPath
@@ -1171,12 +1200,13 @@ function Show-PSTSMEditor {
                 }
 
                 try {
-                    if ($password) {
-                        Register-PSTSMPlan -Plan $plan -Password $password -Confirm:$false
-                    }
-                    else {
-                        Register-PSTSMPlan -Plan $plan -Confirm:$false
-                    }
+                    # Update-PSTSMTaskSchedule leaves the action out of the write entirely; the
+                    # register path replaces the whole task. Which one runs is decided by whether
+                    # the action can be rebuilt, not by what the operator changed.
+                    $writeArgs = @{ Plan = $plan; Confirm = $false }
+                    if ($password) { $writeArgs['Password'] = $password }
+                    if ($scheduleOnly) { Update-PSTSMTaskSchedule @writeArgs | Out-Null }
+                    else { Register-PSTSMPlan @writeArgs }
 
                     if ($renamed) {
                         try {
@@ -1423,15 +1453,25 @@ function Show-PSTSMEditor {
         if (-not $what) { $what = (@($Plan.RawAction.Execute, $Plan.RawAction.Arguments) | Where-Object { $_ }) -join ' ' }
         if (-not $what) { $what = '(nothing recorded)' }
 
-        $txtPreview.Text = 'This task is shown read-only.' + [Environment]::NewLine + [Environment]::NewLine +
+        $txtPreview.Text = "This task's ACTION is read-only. Its schedule is not." + [Environment]::NewLine + [Environment]::NewLine +
         'It runs:' + [Environment]::NewLine +
         "  $what" + [Environment]::NewLine + [Environment]::NewLine +
-        'Why it cannot be edited here:' + [Environment]::NewLine +
+        'Why the action cannot be changed here:' + [Environment]::NewLine +
         (@($Plan.ParseNotes) | ForEach-Object { "  - $_" }) -join [Environment]::NewLine +
         [Environment]::NewLine + [Environment]::NewLine +
-        'PSTSM only rewrites actions it can model exactly, so it will not touch this one. Everything' + [Environment]::NewLine +
-        'above is read from the live task. Edit it in Task Scheduler, or build a new task alongside it.'
-        $btnSave.Enabled = $false
+        'PSTSM only rewrites actions it can model exactly, so it will not touch this one. Saving' + [Environment]::NewLine +
+        'edits the registered task in place - triggers, settings and the run-as account - and' + [Environment]::NewLine +
+        'leaves the action out of the write entirely. To change what it runs, use Task Scheduler.' + [Environment]::NewLine + [Environment]::NewLine +
+        'The name and folder are fixed too: renaming means creating a new task, which would mean' + [Environment]::NewLine +
+        'rebuilding this action.'
+
+        # The action is not editable, so the controls that describe it must not invite edits.
+        foreach ($c in @($txtScript, $btnBrowseScript, $txtExtraArgs, $cboEngine, $cboExecPolicy,
+                $cboWindowStyle, $chkNoProfile, $chkNonInteractive, $cboLogging, $txtLogDir, $txtLogRetain,
+                $txtName, $txtFolder)) {
+            if ($c) { $c.Enabled = $false }
+        }
+        & $refresh
     }
 
     if ($BuildOnly) { return $form }

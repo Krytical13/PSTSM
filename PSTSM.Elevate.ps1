@@ -33,6 +33,10 @@
     A task to unregister after a successful save - set when a rename left a stale registration.
 .PARAMETER RemoveTaskPath
     Folder of -RemoveTaskName.
+.PARAMETER ScheduleOnly
+    Apply the plan's triggers, principal and settings to an already-registered task and leave its
+    action alone, rather than replacing the whole task. Used for a task whose action PSTSM will
+    not rewrite - a COM handler, or one with more actions than a plan holds.
 .NOTES
     Not meant to be run by hand. PSTSM invokes it through Invoke-PSTSMElevatedRegistration.
 #>
@@ -42,7 +46,8 @@ param(
     [Parameter(Mandatory)][string]$ResultPath,
     [switch]$PromptForPassword,
     [string]$RemoveTaskName,
-    [string]$RemoveTaskPath
+    [string]$RemoveTaskPath,
+    [switch]$ScheduleOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,10 +120,21 @@ try {
         $password = $cred.Password
     }
 
-    $reply.Stage = 'register'
-    $registerArgs = @{ Plan = $plan; Confirm = $false }
-    if ($password) { $registerArgs['Password'] = $password }
-    Register-PSTSMPlan @registerArgs -WarningVariable warnings | Out-Null
+    if ($ScheduleOnly) {
+        # The action is not part of this write at all. Renaming is not offered here either: this
+        # path exists precisely because the task cannot be re-created from the plan, so removing
+        # the original and registering a replacement is the one thing it must never do.
+        $reply.Stage = 'update-schedule'
+        $updateArgs = @{ Plan = $plan; Confirm = $false }
+        if ($password) { $updateArgs['Password'] = $password }
+        Update-PSTSMTaskSchedule @updateArgs -WarningVariable warnings | Out-Null
+    }
+    else {
+        $reply.Stage = 'register'
+        $registerArgs = @{ Plan = $plan; Confirm = $false }
+        if ($password) { $registerArgs['Password'] = $password }
+        Register-PSTSMPlan @registerArgs -WarningVariable warnings | Out-Null
+    }
     $reply.Warnings = @($warnings | ForEach-Object { $_.ToString() })
 
     if ($RemoveTaskName) {

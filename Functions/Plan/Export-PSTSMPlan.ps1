@@ -68,6 +68,16 @@ function Export-PSTSMPlan {
             # re-derive it from.
             SwitchDefaultTrue = @($Plan.SwitchDefaultTrue)
 
+            # The command line for a plan that is NOT a PowerShell script, and the marker that says
+            # so. Both must survive this round trip: the elevated save writes the plan to JSON,
+            # relaunches, and reads it back, so a field dropped here is a field the elevated half
+            # never sees. Without them an 'Executable' plan would come back looking like a script
+            # plan and Register-PSTSMPlan would rebuild the action from EnginePath and generated
+            # arguments - silently rewriting the very task this kind exists to preserve, and only
+            # ever on the elevated path, which is the hardest place to notice it.
+            ActionKind       = $(if ($Plan.PSObject.Properties['ActionKind']) { $Plan.ActionKind } else { $null })
+            RawAction        = $(if ($Plan.PSObject.Properties['RawAction']) { $Plan.RawAction } else { $null })
+
             RenderedCommand  = "$($Plan.EnginePath) $($Plan.ArgumentString)"
         }
 
@@ -197,6 +207,14 @@ function Import-PSTSMPlan {
                 EngineReason     = "imported from $Path"
                 DerivedFrom      = $Path
             }
+        }
+
+        # Only when the file actually carried them. A plan exported before these existed has no
+        # ActionKind, and adding one here would be inventing a fact: absent means "a script plan",
+        # which is what every such file was, and Register-PSTSMPlan already treats it that way.
+        if ($raw.PSObject.Properties['ActionKind'] -and $raw.ActionKind) {
+            $plan | Add-Member -MemberType NoteProperty -Name 'ActionKind' -Value ([string]$raw.ActionKind)
+            $plan | Add-Member -MemberType NoteProperty -Name 'RawAction' -Value (ConvertTo-PSTSMOrderedDictionary $raw.RawAction)
         }
 
         $plan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value {

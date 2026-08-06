@@ -717,6 +717,58 @@ Describe 'Live show-and-pump smoke test' -Skip:(-not $script:IsSta) {
         if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
         $caught.Count | Should -Be 0
     }
+
+    It 'opens an Executable task and offers to save it' {
+        # The editor path for a task that is not a PowerShell script. It has no script profile, so
+        # every control the form fills from one has to cope with its absence - which is exactly
+        # the kind of failure that only shows up on a real Show().
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                $a = @($_.Actions)[0]
+                @($_.Actions).Count -eq 1 -and
+                $a.CimClass.CimClassName -eq 'MSFT_TaskExecAction' -and $a.Execute -and $a.Execute -notmatch '(?i)powershell|pwsh'
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no non-PowerShell exec task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.ActionKind | Should -Be 'Executable'
+
+        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTSMEditor -Plan $plan -SelfTest }
+        if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
+
+        $form = Show-PSTSMEditor -Plan $plan -BuildOnly
+        try {
+            $save = @(Get-AllControl -Root $form |
+                    Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -match '(?i)^save' })[0]
+            $save | Should -Not -BeNullOrEmpty
+            $save.Enabled | Should -BeTrue
+        }
+        finally { $form.Dispose() }
+    }
+
+    It 'opens an Unsupported task with the action locked but the schedule savable' {
+        # A multi-action task: the action cannot be rebuilt from a plan, but the schedule around it
+        # can still be edited in place. Save must therefore be ENABLED while the name is not -
+        # renaming would mean creating a new task around an action nothing here can rebuild.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { @($_.Actions).Count -gt 1 })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no multi-action task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.ActionKind | Should -Be 'Unsupported'
+
+        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTSMEditor -Plan $plan -SelfTest }
+        if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
+
+        $form = Show-PSTSMEditor -Plan $plan -BuildOnly
+        try {
+            $all = @(Get-AllControl -Root $form)
+            $save = @($all | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -match '(?i)^save' })[0]
+            $save.Enabled | Should -BeTrue
+
+            $nameBox = @($all | Where-Object { $_ -is [System.Windows.Forms.TextBox] -and $_.Text -eq $t.TaskName })[0]
+            if ($nameBox) { $nameBox.Enabled | Should -BeFalse }
+        }
+        finally { $form.Dispose() }
+    }
 }
 
 Describe 'Apartment state' {
