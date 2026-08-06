@@ -213,10 +213,16 @@ function Show-PSTSM {
     $reload = {
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $p = @{}
+            # Always load the SUPERSET, then narrow in $applyFilter.
+            #
+            # Both checkboxes used to re-query Task Scheduler, which meant ticking one cost a full
+            # re-enumeration - about two seconds - to compute something already present on every
+            # row: IsPowerShell, and whether TaskPath is under \Microsoft\. Loading everything
+            # costs nothing extra, because the enumeration walks all folders either way and the
+            # per-row work that follows is what the flags would have skipped, not the read itself.
+            # -TaskPath stays server-side: that one genuinely narrows what gets enumerated.
+            $p = @{ IncludeMicrosoft = $true }
             if ($TaskPath) { $p['TaskPath'] = $TaskPath }
-            if ($chkPsOnly.Checked) { $p['PowerShellOnly'] = $true }
-            if ($chkMicrosoft.Checked) { $p['IncludeMicrosoft'] = $true }
             $state.Rows = @(Get-PSTSMInventory @p -ErrorAction SilentlyContinue)
         }
         catch {
@@ -233,6 +239,12 @@ function Show-PSTSM {
     $applyFilter = {
         $needle = $txtFilter.Text.Trim()
         $rows = $state.Rows
+
+        # The two checkbox predicates, applied to the loaded superset. Both read fields that are
+        # already on the row, so toggling either is instant instead of a re-query.
+        if ($chkPsOnly.Checked) { $rows = @($rows | Where-Object { $_.IsPowerShell }) }
+        if (-not $chkMicrosoft.Checked) { $rows = @($rows | Where-Object { $_.TaskPath -notlike '\Microsoft\*' }) }
+
         if ($needle) {
             # Origin is searchable too, so "person" or "pstsm" narrows the list to what somebody
             # here actually created - the usual reason for opening this window.
@@ -465,11 +477,33 @@ function Show-PSTSM {
             }
         })
 
+    # Same debounce as the editor: $applyFilter tears down and rebuilds every grid row, so running
+    # it per character made the list stutter while typing. The checkboxes are single events and
+    # filter in memory now, so they stay immediate.
+    $filterTimer = New-Object System.Windows.Forms.Timer
+    $filterTimer.Interval = 150
+    # Guarded like add_Shown below, and for the same reason: on a -BuildOnly form handed to a
+    # harness this function has already returned, so $filterTimer resolves to nothing and
+    # .Stop() on it throws straight into the global thread-exception handler.
+    $filterTimer.add_Tick({
+            if ($filterTimer) { $filterTimer.Stop() }
+            if ($applyFilter) { & $applyFilter }
+        })
+    $form.add_FormClosed({
+            if ($filterTimer) {
+                $filterTimer.Stop()
+                $filterTimer.Dispose()
+            }
+        })
+
     $btnConsole.add_Click({ Start-Process 'taskschd.msc' })
     $btnRefresh.add_Click({ & $reload })
-    $txtFilter.add_TextChanged({ & $applyFilter })
-    $chkPsOnly.add_CheckedChanged({ & $reload })
-    $chkMicrosoft.add_CheckedChanged({ & $reload })
+    $txtFilter.add_TextChanged({
+            if ($filterTimer) { $filterTimer.Stop(); $filterTimer.Start() }
+            elseif ($applyFilter) { & $applyFilter }
+        })
+    $chkPsOnly.add_CheckedChanged({ & $applyFilter })
+    $chkMicrosoft.add_CheckedChanged({ & $applyFilter })
 
     $root.Controls.Add($toolbar, 0, 0)
     $root.Controls.Add($filterRow, 0, 1)

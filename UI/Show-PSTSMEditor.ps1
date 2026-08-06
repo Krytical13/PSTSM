@@ -1,4 +1,4 @@
-﻿# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
 function Show-PSTSMEditor {
     <#
     .SYNOPSIS
@@ -684,6 +684,44 @@ function Show-PSTSMEditor {
         }
     }
 
+    # Coalesces a burst of keystrokes into one refresh.
+    #
+    # Every text field used to call $refresh directly on TextChanged, so a full preflight ran on
+    # each character typed. That is the wrong shape regardless of what the pass costs - typing a
+    # 12-character task name meant 12 sequential validations on the UI thread, and WinForms cannot
+    # paint while one is running, so the window visibly locked up as you typed.
+    #
+    # Discrete events (checkboxes, combo selections) still refresh immediately: one action, one
+    # result, and nothing to coalesce.
+    $refreshTimer = New-Object System.Windows.Forms.Timer
+    $refreshTimer.Interval = 200
+    # Every handler here is guarded on $refreshTimer for the same reason add_Shown is guarded on
+    # $reload in Show-PSTSM: on a -BuildOnly form handed to a harness this function has already
+    # returned, the closed-over locals resolve to nothing, and .Stop() on $null throws into the
+    # global thread-exception handler rather than failing quietly.
+    $refreshTimer.add_Tick({
+            # Stop FIRST. A Windows.Forms.Timer repeats until told otherwise, and $refresh below
+            # can pump messages - so leaving it running here re-enters this handler on a loop.
+            if ($refreshTimer) { $refreshTimer.Stop() }
+            if ($refresh) { & $refresh }
+        })
+
+    # Restarting the timer is what makes it a debounce: each keystroke pushes the deadline out, so
+    # the pass runs once the typing stops rather than once per character.
+    $refreshSoon = {
+        if ($refreshTimer) { $refreshTimer.Stop(); $refreshTimer.Start() }
+        elseif ($refresh) { & $refresh }
+    }
+
+    # The form owns the timer; without this it outlives the window and keeps a reference to every
+    # control the Tick handler closes over.
+    $form.add_FormClosed({
+            if ($refreshTimer) {
+                $refreshTimer.Stop()
+                $refreshTimer.Dispose()
+            }
+        })
+
     # Rebuilds the parameter controls for the current script profile.
     $rebuildParams = {
         $paramHost.Controls.Clear()
@@ -748,7 +786,7 @@ function Show-PSTSMEditor {
                         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $box.Text = $dlg.SelectedPath }
                         $dlg.Dispose()
                     })
-                $inner.add_TextChanged({ & $refresh })
+                $inner.add_TextChanged({ & $refreshSoon })
                 $panel.Controls.Add($inner, 0, 0)
                 $panel.Controls.Add($browse, 1, 0)
                 $rowControl = $panel
@@ -756,7 +794,7 @@ function Show-PSTSMEditor {
             }
             else {
                 $box = New-PSTSMUITextBox
-                $box.add_TextChanged({ & $refresh })
+                $box.add_TextChanged({ & $refreshSoon })
                 $rowControl = $box
                 $valueControl = $box
             }
@@ -969,7 +1007,7 @@ function Show-PSTSMEditor {
 
     foreach ($c in @($txtName, $txtFolder, $txtDesc, $txtWorkDir, $txtUser, $txtTimeLimit,
             $txtRestartCount, $txtRestartInterval, $txtLogDir, $txtLogRetain, $txtExtraArgs)) {
-        $c.add_TextChanged({ & $refresh })
+        $c.add_TextChanged({ & $refreshSoon })
     }
     # $cboAccountType is deliberately absent: it has its own handler that re-populates $cboWhen
     # before refreshing, and adding a second handler here would refresh against a stale pair.
