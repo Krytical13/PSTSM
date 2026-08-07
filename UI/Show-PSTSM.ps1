@@ -51,7 +51,14 @@ function Show-PSTSM {
         return
     }
 
-    $state = @{ Rows = @() }
+    # LoadShell/LoadHandle hold the in-flight background read. They are state rather than locals so
+    # the timer that completes the load and the handler that starts it are talking about the same
+    # one, and so a second Refresh while one is running can be ignored instead of racing it.
+    $state = @{ Rows = @(); LoadShell = $null; LoadHandle = $null }
+
+    # Resolved once, on this thread. The background runspace starts with no module loaded and no
+    # $PSScriptRoot of its own, so it has to be told where the manifest is.
+    $moduleManifest = Join-Path (Split-Path $PSScriptRoot -Parent) 'PSTSM.psd1'
 
     $form = New-PSTSMUIForm -Title 'PSTSM - PowerShell Task Scheduler Manager' -Width 1220 -Height 700
 
@@ -210,9 +217,27 @@ function Show-PSTSM {
         $grid.SelectedRows[0].Tag
     }
 
+    # Reading the task list takes ~560ms on a 290-task machine, and it used to happen in add_Shown -
+    # so the window did not paint until it finished, which reads as "the tool is slow to open"
+    # regardless of what it is doing. It now runs on its own runspace: the form appears at once,
+    # says what it is doing, and fills in when the read lands.
+    #
+    # The trade is honest - the background copy has to import the module into a fresh runspace
+    # (108ms) so total wall-clock goes up by roughly that much. What changes is that none of it is
+    # spent staring at nothing.
+    $loadTimer = New-Object System.Windows.Forms.Timer
+    $loadTimer.Interval = 50
+
     $reload = {
+        # A second Refresh while one is in flight is a no-op rather than a race. Two runspaces
+        # writing $state.Rows would leave whichever finished last, which is not necessarily the one
+        # the operator asked for.
+        if ($state.LoadShell) { return }
+
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        $lblStatus.Text = 'Reading scheduled tasks...'
         try {
+            $shell = [powershell]::Create()
             # Always load the SUPERSET, then narrow in $applyFilter.
             #
             # Both checkboxes used to re-query Task Scheduler, which meant ticking one cost a full
@@ -221,17 +246,62 @@ function Show-PSTSM {
             # costs nothing extra, because the enumeration walks all folders either way and the
             # per-row work that follows is what the flags would have skipped, not the read itself.
             # -TaskPath stays server-side: that one genuinely narrows what gets enumerated.
-            $p = @{ IncludeMicrosoft = $true }
-            if ($TaskPath) { $p['TaskPath'] = $TaskPath }
-            $state.Rows = @(Get-PSTSMInventory @p -ErrorAction SilentlyContinue)
+            $null = $shell.AddScript({
+                    param($manifest, $taskPath)
+                    Import-Module $manifest -Force -ErrorAction Stop
+                    $p = @{ IncludeMicrosoft = $true }
+                    if ($taskPath) { $p['TaskPath'] = $taskPath }
+                    # Emitted one row at a time, NOT wrapped with a leading comma. BeginInvoke
+                    # returns a PSDataCollection, which already preserves the count for zero and
+                    # one row alike - so the comma that protects an ordinary array assignment
+                    # here produces a collection of ONE item that happens to be a 290-element
+                    # array, and the grid gets a single unrenderable row instead of the tasks.
+                    Get-PSTSMInventory @p -ErrorAction SilentlyContinue
+                }).AddArgument($moduleManifest).AddArgument($TaskPath)
+
+            $state.LoadShell = $shell
+            $state.LoadHandle = $shell.BeginInvoke()
+            $loadTimer.Start()
         }
         catch {
-            $state.Rows = @()
+            $state.LoadShell = $null
+            $state.LoadHandle = $null
+            $form.Cursor = [System.Windows.Forms.Cursors]::Default
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not read scheduled tasks',
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
+    }
+
+    # Polling on a UI timer rather than marshalling from the worker: everything below touches
+    # WinForms controls, and this way it is already on the thread that owns them.
+    $completeLoad = {
+        if (-not $state.LoadHandle -or -not $state.LoadHandle.IsCompleted) { return }
+        if ($loadTimer) { $loadTimer.Stop() }
+
+        $shell = $state.LoadShell
+        $handle = $state.LoadHandle
+        $state.LoadShell = $null
+        $state.LoadHandle = $null
+
+        $failure = $null
+        try {
+            $out = $shell.EndInvoke($handle)
+            $state.Rows = @($out | Where-Object { $null -ne $_ })
+            # Errors raised inside the runspace do not throw out of EndInvoke; they land here.
+            if ($shell.Streams.Error.Count -gt 0 -and $state.Rows.Count -eq 0) {
+                $failure = $shell.Streams.Error[0].ToString()
+            }
+        }
+        catch { $failure = $_.Exception.Message }
         finally {
+            try { $shell.Dispose() } catch { }
             $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+
+        if ($failure) {
+            $state.Rows = @()
+            [System.Windows.Forms.MessageBox]::Show($failure, 'Could not read scheduled tasks',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         & $applyFilter
     }
@@ -489,10 +559,24 @@ function Show-PSTSM {
             if ($filterTimer) { $filterTimer.Stop() }
             if ($applyFilter) { & $applyFilter }
         })
+    $loadTimer.add_Tick({ if ($completeLoad) { & $completeLoad } })
+
     $form.add_FormClosed({
             if ($filterTimer) {
                 $filterTimer.Stop()
                 $filterTimer.Dispose()
+            }
+            if ($loadTimer) {
+                $loadTimer.Stop()
+                $loadTimer.Dispose()
+            }
+            # A read still in flight when the window closes: stop waiting on it and let it unwind.
+            # Not disposed inline - the worker may be parked in a Task Scheduler call, and Dispose
+            # would block the closing window for as long as that takes.
+            if ($state -and $state.LoadShell) {
+                try { $null = $state.LoadShell.BeginStop($null, $null) } catch { }
+                $state.LoadShell = $null
+                $state.LoadHandle = $null
             }
         })
 
@@ -522,7 +606,21 @@ function Show-PSTSM {
 
     if ($SelfTest) {
         Show-PSTSMUIForTest -Form $form
-        for ($i = 0; $i -lt 60; $i++) {
+        # Pumps until the background read has landed AND been applied to the grid, not for a fixed
+        # 900ms. The point of this seam is to exercise the real load against the machine's real
+        # tasks - a fixed pump that happens to be shorter than the read would leave that untested
+        # while still reporting green, which is worse than not having the test.
+        $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($deadline.Elapsed.TotalSeconds -lt 30) {
+            [System.Windows.Forms.Application]::DoEvents()
+            if (-not $state.LoadShell -and $state.Rows.Count -gt 0) { break }
+            # A machine with genuinely no tasks outside \Microsoft\ is a real state, not a hang, so
+            # the loop must not wait 30s for rows that are never coming.
+            if (-not $state.LoadShell -and $deadline.Elapsed.TotalSeconds -gt 2) { break }
+            Start-Sleep -Milliseconds 15
+        }
+        # A few more passes so the paint that follows the fill also runs under the exception trap.
+        for ($i = 0; $i -lt 20; $i++) {
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 15
         }

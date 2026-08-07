@@ -63,8 +63,30 @@ function Show-PSTSMUIForTest {
     if ('PSTSMNative.Win32' -as [type]) {
         $handle = $Form.Handle          # forces handle creation without showing
         [void][PSTSMNative.Win32]::ShowWindow($handle, 4)   # SW_SHOWNOACTIVATE
+
+        # ShowWindow puts the window on screen at the Win32 level, which is the whole point of
+        # using it - but it goes around WinForms, so WinForms never raises Shown. Every add_Shown
+        # handler in the tool was therefore dead in this seam: the main window's test asserted it
+        # "exercises Get-PSTSMInventory via the add_Shown handler" and had never once run it.
+        #
+        # OnShown is protected, so reflection is the only way to raise it faithfully. Raising it
+        # rather than calling the handler directly is deliberate: it also proves the handler is
+        # actually wired up, which is half of what a show-time test is for.
+        try {
+            $onShown = [System.Windows.Forms.Form].GetMethod('OnShown',
+                [System.Reflection.BindingFlags]::NonPublic -bor [System.Reflection.BindingFlags]::Instance)
+            # [void], because MethodInfo.Invoke emits its return value even for a void method - and
+            # a stray $null on this function's output stream flows all the way up into whatever the
+            # caller collected. In the smoke tests that is the list of caught thread exceptions, so
+            # an un-suppressed $null read as "a thread exception with an empty message".
+            if ($onShown) { [void]$onShown.Invoke($Form, @([System.EventArgs]::Empty)) }
+        }
+        catch {
+            Write-Verbose "Could not raise Shown for the test seam: $($_.Exception.Message)"
+        }
     }
     else {
+        # Show() raises Shown by itself.
         $Form.WindowState = 'Minimized'
         $Form.Show()
     }

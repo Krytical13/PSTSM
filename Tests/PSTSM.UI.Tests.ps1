@@ -710,6 +710,48 @@ Describe 'Live show-and-pump smoke test' -Skip:(-not $script:IsSta) {
         $caught.Count | Should -Be 0
     }
 
+    It 'raises Shown, so add_Shown handlers are actually exercised by this seam' {
+        # Show-PSTSMUIForTest puts the window up with ShowWindow(SW_SHOWNOACTIVATE), which goes
+        # around WinForms - so for a long time WinForms never raised Shown here and every
+        # add_Shown handler in the tool was dead in the test seam. The main-window test below
+        # claimed to exercise Get-PSTSMInventory through that handler and had never run it once.
+        #
+        # Asserted directly rather than through a real window, so the day someone simplifies the
+        # seam back to a bare ShowWindow this fails immediately instead of quietly hollowing out
+        # every smoke test that depends on it.
+        # InModuleScope because the seam is internal plumbing and deliberately not exported.
+        $fired = InModuleScope PSTSM {
+            $f = New-Object System.Windows.Forms.Form
+            $f.StartPosition = 'Manual'
+            $f.Location = New-Object System.Drawing.Point(-32000, -32000)
+            # A plain [ref] rather than a scope-qualified variable: the handler runs in its own
+            # scope and an assignment there would not be visible out here.
+            $flag = [ref]$false
+            $f.add_Shown({ $flag.Value = $true }.GetNewClosure())
+            try {
+                Show-PSTSMUIForTest -Form $f
+                [System.Windows.Forms.Application]::DoEvents()
+                $flag.Value
+            }
+            finally { $f.Close(); $f.Dispose() }
+        }
+        $fired | Should -BeTrue
+    }
+
+    It 'emits nothing of its own, so a caller collecting output does not see phantom results' {
+        # MethodInfo.Invoke emits its return value even for a void method. An unsuppressed $null
+        # from raising Shown flowed up into the caught-exceptions list in the smoke tests below and
+        # read as "a thread exception with an empty message" - a failure with no defect behind it.
+        $count = InModuleScope PSTSM {
+            $f = New-Object System.Windows.Forms.Form
+            $f.StartPosition = 'Manual'
+            $f.Location = New-Object System.Drawing.Point(-32000, -32000)
+            try { @(Show-PSTSMUIForTest -Form $f).Count }
+            finally { $f.Close(); $f.Dispose() }
+        }
+        $count | Should -Be 0
+    }
+
     It 'shows the main window, loads the real task list, and pumps without a thread exception' {
         # This one also exercises Get-PSTSMInventory against the machine's real tasks via the
         # add_Shown handler, so a bad row breaks the test rather than the user's first launch.
