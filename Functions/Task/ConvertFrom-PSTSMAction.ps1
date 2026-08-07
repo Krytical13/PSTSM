@@ -53,11 +53,10 @@ function ConvertFrom-PSTSMAction {
     try { $exeLeaf = [System.IO.Path]::GetFileName($Execute.Trim('"', ' ')) }
     catch { Write-Verbose "Could not parse Execute value '$Execute': $($_.Exception.Message)" }
 
-    $engineId = $null
-    switch -Regex ($exeLeaf) {
-        '(?i)^powershell(\.exe)?$' { $engineId = 'powershell' }
-        '(?i)^pwsh(\.exe)?$' { $engineId = 'pwsh' }
-    }
+    # Shared with the -PowerShellOnly fast path in Get-PSTSMInventory. The two must agree exactly:
+    # a cheap check that disagreed with this one would hide a task the editor opens fine, or list
+    # one it cannot model.
+    $engineId = Resolve-PSTSMEngineId -Execute $Execute
 
     $bitness = if ($Execute -match '(?i)\\SysWOW64\\') { 'x86' } elseif ($engineId) { 'x64' } else { $null }
 

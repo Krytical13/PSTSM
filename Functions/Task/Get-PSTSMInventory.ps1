@@ -69,6 +69,16 @@ function Get-PSTSMInventory {
     foreach ($task in $tasks) {
         $action = @($task.Actions)[0]
 
+        # Decide BEFORE parsing, when the answer can be had from the file name alone. The full
+        # parse tokenises a command line by CommandLineToArgvW rules, and running it over all 290
+        # actions only to discard most of them cost 134ms of a list the caller narrowed on the way
+        # in. Resolve-PSTSMEngineId is what ConvertFrom-PSTSMAction itself uses, so the fast path
+        # cannot disagree with the slow one.
+        if ($PowerShellOnly) {
+            if (-not $action -or -not $action.PSObject.Properties['Execute']) { continue }
+            if (-not (Resolve-PSTSMEngineId -Execute $action.Execute)) { continue }
+        }
+
         $parsed = $null
         if ($action -and $action.PSObject.Properties['Execute']) {
             $parsed = ConvertFrom-PSTSMAction -Execute $action.Execute `
@@ -76,6 +86,8 @@ function Get-PSTSMInventory {
                 -WorkingDirectory $action.WorkingDirectory
         }
 
+        # Kept as a belt-and-braces check: the fast path above already skipped these, and this
+        # catches the case where an action has an Execute the parser reads differently.
         if ($PowerShellOnly -and -not ($parsed -and $parsed.IsPowerShell)) { continue }
 
         $selected.Add([PSCustomObject]@{ Task = $task; Action = $action; Parsed = $parsed })

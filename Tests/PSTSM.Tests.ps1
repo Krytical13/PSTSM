@@ -999,6 +999,50 @@ Describe 'Editing existing tasks of every shape' {
     }
 }
 
+Describe 'The -PowerShellOnly fast path agrees with the full parse' {
+    # Get-PSTSMInventory decides -PowerShellOnly from the file name before parsing anything, so it
+    # does not tokenise 290 command lines only to discard most of them. That is only safe while the
+    # cheap answer and the real one are identical: a disagreement would hide a task the editor
+    # opens fine, or list one it cannot model - and it would do so silently, on whichever machine
+    # happened to have the odd Execute value.
+    #
+    # Checked against every action on this machine rather than a fixture, because the shapes that
+    # would break it are the ones nobody thinks to write down.
+    It 'classifies every action on this machine the same way the parser does' {
+        $checked = 0
+        $disagreements = @()
+        foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            $a = @($t.Actions)[0]
+            if (-not $a -or -not $a.PSObject.Properties['Execute']) { continue }
+            $checked++
+            $fast = [bool](InModuleScope PSTSM -Parameters @{ e = [string]$a.Execute } {
+                    Resolve-PSTSMEngineId -Execute $e
+                })
+            $slow = (ConvertFrom-PSTSMAction -Execute $a.Execute -Arguments $a.Arguments).IsPowerShell
+            if ($fast -ne $slow) { $disagreements += "$($a.Execute): fast=$fast slow=$slow" }
+        }
+        $checked | Should -BeGreaterThan 0 -Because 'a machine with no exec actions proves nothing'
+        $disagreements | Should -BeNullOrEmpty
+    }
+
+    It 'reads the host name out of the shapes that actually turn up in the wild' {
+        InModuleScope PSTSM {
+            Resolve-PSTSMEngineId -Execute 'powershell.exe' | Should -Be 'powershell'
+            Resolve-PSTSMEngineId -Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' | Should -Be 'powershell'
+            Resolve-PSTSMEngineId -Execute '"C:\Program Files\PowerShell\7\pwsh.exe"' | Should -Be 'pwsh'
+            Resolve-PSTSMEngineId -Execute 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\POWERSHELL.EXE' | Should -Be 'powershell'
+            Resolve-PSTSMEngineId -Execute 'pwsh' | Should -Be 'pwsh'
+            # Not hosts, and the near-misses matter: a task running something merely NAMED like one
+            # must not be treated as a PowerShell task.
+            Resolve-PSTSMEngineId -Execute 'C:\Windows\System32\robocopy.exe' | Should -BeNullOrEmpty
+            Resolve-PSTSMEngineId -Execute 'powershell_ise.exe' | Should -BeNullOrEmpty
+            Resolve-PSTSMEngineId -Execute 'notpwsh.exe' | Should -BeNullOrEmpty
+            Resolve-PSTSMEngineId -Execute '' | Should -BeNullOrEmpty
+            Resolve-PSTSMEngineId -Execute $null | Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe 'Test-PSTSMPathAvailable does not hang on an unreachable share' {
     # Test-Path against a UNC path whose server is gone blocks for the full SMB timeout - measured
     # at 42 SECONDS against an unroutable address - and Get-PSTSMInventory asked it once per row on
