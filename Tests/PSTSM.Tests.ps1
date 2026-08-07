@@ -975,6 +975,78 @@ Describe 'Editing existing tasks of every shape' {
     }
 }
 
+Describe 'Test-PSTSMPathAvailable does not hang on an unreachable share' {
+    # Test-Path against a UNC path whose server is gone blocks for the full SMB timeout - measured
+    # at 42 SECONDS against an unroutable address - and Get-PSTSMInventory asked it once per row on
+    # the UI thread. One task pointing at a decommissioned file server froze the whole list.
+    #
+    # 192.0.2.0/24 is TEST-NET-1, reserved by RFC 5737 and guaranteed not to route, so this is a
+    # real timeout rather than a mock of one. Nothing is written anywhere; the probe only reads.
+    BeforeAll {
+        $script:DeadUnc = '\\192.0.2.1\share\nothing.ps1'
+    }
+    BeforeEach {
+        InModuleScope PSTSM { $script:PSTSMPathCache = @{} }
+    }
+
+    It 'gives up on an unreachable network path inside its timeout' {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $r = InModuleScope PSTSM -Parameters @{ p = $script:DeadUnc } {
+            Test-PSTSMPathAvailable -Path $p -PathType Leaf -TimeoutMs 800
+        }
+        $sw.Stop()
+        # Generous headroom over the 800ms budget for a loaded machine, but nowhere near 42s.
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 10
+        $r | Should -BeNullOrEmpty -Because 'unknown is not the same as missing'
+    }
+
+    It 'reports unknown rather than missing, so nobody is sent to fix a file that is fine' {
+        $r = InModuleScope PSTSM -Parameters @{ p = $script:DeadUnc } {
+            Test-PSTSMPathAvailable -Path $p -PathType Leaf -TimeoutMs 800
+        }
+        # The distinction the whole function exists for: $false would render the script red in the
+        # grid and raise SCRIPT_MISSING in the preflight.
+        $r | Should -Not -Be $false
+        $null -eq $r | Should -BeTrue
+    }
+
+    It 'answers a repeat question from the memo instead of stalling again' {
+        $null = InModuleScope PSTSM -Parameters @{ p = $script:DeadUnc } {
+            Test-PSTSMPathAvailable -Path $p -PathType Leaf -TimeoutMs 800
+        }
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $null = InModuleScope PSTSM -Parameters @{ p = $script:DeadUnc } {
+            Test-PSTSMPathAvailable -Path $p -PathType Leaf -TimeoutMs 800
+        }
+        $sw.Stop()
+        $sw.Elapsed.TotalMilliseconds | Should -BeLessThan 400 -Because 'a list refresh must not pay the timeout again per row'
+    }
+
+    It 'still answers local paths exactly as Test-Path does' {
+        # The overwhelming majority of paths, and the case that must not regress: these stay on the
+        # plain synchronous call, no runspace involved.
+        InModuleScope PSTSM {
+            Test-PSTSMPathAvailable -Path 'C:\Windows' -PathType Container | Should -BeTrue
+            Test-PSTSMPathAvailable -Path (Join-Path $env:SystemRoot 'explorer.exe') -PathType Leaf | Should -BeTrue
+            Test-PSTSMPathAvailable -Path 'C:\this-does-not-exist-pstsm\x.ps1' -PathType Leaf | Should -BeExactly $false -Because 'a local miss is genuinely missing, not unknown'
+            Test-PSTSMPathAvailable -Path '' | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'preflights a plan on a dead share without calling the script missing' {
+        $plan = InModuleScope PSTSM {
+            $p = New-PSTSMPlan -TaskName 'UncCase' `
+                -ScriptPath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+                -Trigger (New-PSTSMTriggerSpec -Type Daily -At '06:00')
+            $p.ScriptPath = '\\192.0.2.7\scripts\nightly.ps1'
+            $p
+        }
+        $ids = @(Test-PSTSMPlan -Plan $plan -CanElevate -SkipExistingTaskCheck | ForEach-Object { $_.Id })
+        $ids | Should -Not -Contain 'SCRIPT_MISSING'
+        $ids | Should -Contain 'SCRIPT_UNREACHABLE'
+    }
+}
+
 Describe 'Get-PSTSMGmsaState caching' {
     # The directory reads behind the gMSA checks. Test-PSTSMPlan runs on every editor refresh, so
     # without memoisation a gMSA task means two DC round trips per keystroke burst - which on a

@@ -145,7 +145,11 @@ function Get-PSTSMInventory {
             Bitness          = if ($parsed) { $parsed.Bitness } else { $null }
             ScriptPath       = if ($parsed) { $parsed.ScriptPath } else { $null }
             ScriptName       = if ($parsed -and $parsed.ScriptPath) { Split-Path $parsed.ScriptPath -Leaf } else { $null }
-            ScriptExists     = if ($parsed -and $parsed.ScriptPath) { Test-Path -LiteralPath $parsed.ScriptPath } else { $null }
+            # Test-PSTSMPathAvailable, not Test-Path: one task pointing at a share that is gone
+            # blocked this loop for 42 seconds, on the thread painting the window. $null already
+            # meant "not checked" here, and now also covers "the network did not answer" - which
+            # the grid renders as no colour rather than the red it uses for a missing script.
+            ScriptExists     = if ($parsed -and $parsed.ScriptPath) { Test-PSTSMPathAvailable -Path $parsed.ScriptPath } else { $null }
             WorkingDirectory = if ($action) { $action.WorkingDirectory } else { $null }
             Arguments        = if ($action) { $action.Arguments } else { $null }
 

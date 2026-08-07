@@ -87,7 +87,7 @@ function Test-PSTSMPlan {
             # Resolved the way Task Scheduler will resolve it: an unquoted bare name is looked up
             # on PATH at run time, so "robocopy.exe" is legitimate and must not be called missing.
             $bare = $exePath.Trim('"', ' ')
-            $found = if ([System.IO.Path]::IsPathRooted($bare)) { Test-Path -LiteralPath $bare -PathType Leaf }
+            $found = if ([System.IO.Path]::IsPathRooted($bare)) { Test-PSTSMPathAvailable -Path $bare -PathType Leaf }
             else { [bool](Get-Command -Name $bare -CommandType Application -ErrorAction SilentlyContinue) }
             if ($found) {
                 Add-PSTSMCheck 'PROGRAM_OK' 'Ok' 'Program resolved' $bare $null
@@ -106,51 +106,43 @@ function Test-PSTSMPlan {
     }
 
     if ($isExecPlan) {
-        # A stand-in profile so the shared sections below can read Signals and Parameters without
-        # each having to know that no script was ever parsed. It mirrors Get-PSTSMScriptProfile's
-        # shape exactly - property names included, because a typo here reads as $null and
-        # '-not $null' is $true, which would fire the very warnings this exists to suppress.
-        #
-        # Empty is the truthful value: nothing was examined, so nothing was found. HasExitStatement
-        # is the one that must be $true - a program's exit code is its own business, and Task
-        # Scheduler records whatever it returns.
-        $ScriptProfile = [PSCustomObject]@{
-            Parameters        = @()
-            HasParameters     = $false
-            IsParseable       = $true
-            IsReadable        = $true
-            ParseErrors       = @()
-            RequiresElevation = $false
-            RequiredVersion   = $null
-            RequiredEditions  = @()
-            RequiredModules   = @()
-            ConfigFiles       = @()
-            Signals           = [PSCustomObject]@{
-                InteractiveCommands = @()
-                NetworkCommands     = @()
-                UncPaths            = @()
-                DpapiCommands       = @()
-                HasExitStatement    = $true
-                UsesGui             = $false
-                CommandNames        = @()
-            }
-            Encoding          = [PSCustomObject]@{
-                HasBom      = $true
-                HasNonAscii = $false
-            }
-        }
+        # A stand-in so the shared sections below can read Signals and Parameters without each
+        # having to know that no script was ever parsed. Shared with the unreachable-script case -
+        # see New-PSTSMEmptyScriptProfile for why its property names matter.
+        $ScriptProfile = New-PSTSMEmptyScriptProfile
     }
 
     # --- script present and parseable ---------------------------------------------------
-    if (-not $isExecPlan -and -not (Test-Path -LiteralPath $Plan.ScriptPath -PathType Leaf)) {
+    # Three outcomes, not two. $null is "the network did not answer in time", and treating that as
+    # "not found" would send someone to fix a script that was never broken - while treating it as
+    # "found" would then block for 42 seconds inside Get-PSTSMScriptProfile reading the file.
+    $scriptPresent = if ($isExecPlan) { $true } else { Test-PSTSMPathAvailable -Path $Plan.ScriptPath -PathType Leaf }
+
+    if ($scriptPresent -eq $false) {
         Add-PSTSMCheck 'SCRIPT_MISSING' 'Error' 'Script not found' `
             "No file at $($Plan.ScriptPath)." `
             'Pick the script again, or move it to a path the scheduled account can read.'
         return $results.ToArray()
     }
 
-    if (-not $ScriptProfile -and -not $isExecPlan) {
+    $scriptUnreachable = ($null -eq $scriptPresent)
+    if ($scriptUnreachable) {
+        Add-PSTSMCheck 'SCRIPT_UNREACHABLE' 'Warning' 'Could not reach the script to check it' `
+            "$($Plan.ScriptPath) is on a network path that did not respond." `
+            ('Not the same as missing - the file may be perfectly fine and the share simply slow or ' +
+            'offline from here. Nothing below is derived from the script, because it was never read. ' +
+            'Note the task account has to reach this path at run time too, and an S4U logon cannot ' +
+            'authenticate to a share at all.')
+    }
+
+    if (-not $ScriptProfile -and -not $isExecPlan -and -not $scriptUnreachable) {
         $ScriptProfile = Get-PSTSMScriptProfile -Path $Plan.ScriptPath -DefaultEngineId $Plan.EngineId
+    }
+    elseif ($scriptUnreachable) {
+        # Same stand-in the executable plans use: everything empty, which is the truthful answer
+        # when nothing was examined, and keeps every section below from inventing findings out of
+        # absences that are artefacts of not having read the file.
+        $ScriptProfile = New-PSTSMEmptyScriptProfile
     }
 
     # Unreadable and unparseable are different problems with different remedies, and conflating
@@ -470,7 +462,9 @@ function Test-PSTSMPlan {
     }
 
     # --- paths -------------------------------------------------------------------------
-    if ($Plan.WorkingDirectory -and -not (Test-Path -LiteralPath $Plan.WorkingDirectory -PathType Container)) {
+    # -eq $false, not -not: an unreachable share answers $null, and "could not check" must not be
+    # reported to the operator as "does not exist".
+    if ($Plan.WorkingDirectory -and (Test-PSTSMPathAvailable -Path $Plan.WorkingDirectory -PathType Container) -eq $false) {
         Add-PSTSMCheck 'WORKDIR' 'Warning' 'Working directory does not exist' `
             $Plan.WorkingDirectory `
             'Task Scheduler does not create it; the action fails with 0x2 (file not found).'
@@ -545,11 +539,18 @@ function Test-PSTSMPlan {
     if ($Plan.Logging -and $Plan.Logging.Mode -eq 'Transcript' -and $Plan.Logging.Directory) {
         $logDir = $Plan.Logging.Directory
         $logProblem = $null
+        $logUnreachable = $false
         try {
-            if (-not (Test-Path -LiteralPath $logDir)) {
+            # A log directory on a share is the most likely UNC path in a whole plan, and the write
+            # probe below would block on a dead one just as hard as the existence test.
+            $logDirThere = Test-PSTSMPathAvailable -Path $logDir
+            if ($null -eq $logDirThere) {
+                $logUnreachable = $true
+            }
+            elseif (-not $logDirThere) {
                 # Not created here - this function must not have side effects. Only tested.
                 $parent = Split-Path -Path $logDir -Parent
-                if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                if ($parent -and (Test-PSTSMPathAvailable -Path $parent) -eq $false) {
                     $logProblem = "neither it nor its parent '$parent' exists"
                 }
             }
@@ -563,6 +564,14 @@ function Test-PSTSMPlan {
             }
         }
         catch { $logProblem = $_.Exception.Message }
+
+        if ($logUnreachable) {
+            Add-PSTSMCheck 'LOG_DIR_UNREACHABLE' 'Warning' 'Could not reach the log directory' `
+                "$logDir is on a network path that did not respond." `
+                ('Not the same as unusable - it may be fine and simply slow or offline from here. ' +
+                'But the task account has to write here on every run, and an S4U logon cannot ' +
+                'authenticate to a share at all, so a local directory is the safer choice.')
+        }
 
         if ($logProblem) {
             Add-PSTSMCheck 'LOG_DIR' 'Warning' 'Transcript directory may not be usable' `
