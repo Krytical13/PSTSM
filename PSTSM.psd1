@@ -1,7 +1,7 @@
 ﻿# SPDX-License-Identifier: GPL-3.0-or-later
 @{
     RootModule        = 'PSTSM.psm1'
-    ModuleVersion     = '0.4.0'
+    ModuleVersion     = '0.5.0'
     GUID              = 'c9e4a7f2-58b1-4d36-9a0e-7b2c15d8e034'
     Author            = 'Krytical13'
     CompanyName       = ''
@@ -109,6 +109,30 @@
             # Must stay a single constant expression. String concatenation with '+' here makes
             # the manifest a "dynamic expression" that Import-PowerShellDataFile refuses to read.
             ReleaseNotes = @'
+0.5.0 - A task that is not a PowerShell script can now be edited, and the window stops freezing.
+
+Editing: an action PSTSM did not build is no longer refused wholesale. ActionKind separates the
+three cases that were previously one - a .ps1 behind a PowerShell host, a bare command line
+(robocopy.exe, a .cmd, inline -Command), and an action with no command line at all such as a COM
+handler. The middle case is now fully editable, and its three fields are written back verbatim
+with nothing re-quoted, which is a stricter guarantee than the script path. A task that runs
+several programs in order keeps all of them, with a selector to edit each. Only a genuinely
+unmodellable action stays read-only, and even then Update-PSTSMTaskSchedule changes the schedule
+around it without touching the action.
+
+Speed, all measured on a 290-task machine. An unreachable UNC path blocked Test-Path for 42
+SECONDS on the UI thread, once per affected row, so a single task pointing at a decommissioned
+share hung the whole list - network paths now answer within a budget and report "unknown" rather
+than "missing". The preflight ran a full task-scheduler enumeration to answer "does this name
+exist", on every keystroke: 386ms per character, now 16ms. The task list re-queried the service
+to answer questions already present on every row. Reading the list moved off the UI thread, so
+the window paints at once instead of after half a second.
+
+Fixed on the way: the elevated save serialised the plan to JSON without the raw action, so an
+executable task saved behind a UAC prompt came back rewritten as a PowerShell one. And the test
+seam never raised Shown, which meant every add_Shown handler - including the one that loads the
+task list - had never been exercised by the suite that claimed to cover it.
+
 0.4.0 - Elevation moved to where the privilege is actually needed. The tool opens unelevated;
 saving a task that needs administrator rights elevates for that one registration behind a single
 consent prompt, keeping whatever is in the editor. Windows cannot raise a running process's
