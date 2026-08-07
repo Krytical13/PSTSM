@@ -76,6 +76,11 @@ function Show-PSTSMEditor {
         ActionKind    = 'PowerShellScript'
         Locked        = $false     # action cannot be rewritten - only the schedule around it
         BasePlan      = $null      # the loaded plan, kept whole so Executable edits overlay it
+        # Working copies of an Executable task's command lines, and which one the three fields are
+        # currently showing. Edits land in the list when the selection changes or the plan is
+        # built, so switching between actions does not lose what was typed into the last one.
+        ExecActions   = @()
+        ExecIndex     = 0
         OriginalName  = $null
         OriginalPath  = $null
         # Read once. A session cannot gain an administrator token while it runs, so re-asking on
@@ -147,6 +152,23 @@ function Show-PSTSMEditor {
     $secScript = New-PSTSMUISection -Title 'Script'
     $txtScript = New-PSTSMUITextBox -Text $ScriptPath
     $btnBrowseScript = New-PSTSMUIButton -Text 'Browse...' -Width 90
+
+    # A task can run several programs in order. One selector, three fields, rather than N sets of
+    # fields: the count is not known until a task is opened and the section would otherwise change
+    # height with it.
+    #
+    # Added ONLY when there is more than one action, never added-then-hidden - a hidden control is
+    # still measured by the layout, and Control.Visible reads false for everything on a form that
+    # has never been shown, so "hidden" is not something the offline layout checks can even see.
+    $cboExecAction = $null
+    if ($state.ActionKind -eq 'Executable' -and $Plan -and
+        $Plan.PSObject.Properties['RawActions'] -and @($Plan.RawActions).Count -gt 1) {
+        $cboExecAction = New-Object System.Windows.Forms.ComboBox
+        $cboExecAction.DropDownStyle = 'DropDownList'
+        $cboExecAction.Dock = 'Top'
+        $cboExecAction.AccessibleName = 'Which action to edit'
+        Add-PSTSMUIStacked -Stack $secScript.Content -Control $cboExecAction
+    }
 
     $scriptRow = New-Object System.Windows.Forms.TableLayoutPanel
     $scriptRow.Dock = 'Top'; $scriptRow.AutoSize = $true; $scriptRow.ColumnCount = 2; $scriptRow.RowCount = 1
@@ -460,6 +482,38 @@ function Show-PSTSMEditor {
     # The three command-line fields go across as typed. Nothing here re-quotes, re-parses or
     # regenerates them, which is the whole guarantee for this action kind: what was read from the
     # task is what goes back unless the operator changed it themselves.
+    # Reads the three command-line fields into whichever action is currently selected. Called
+    # before the selection moves and before the plan is built - the two moments the on-screen
+    # values have to become part of the list rather than just sitting in the controls.
+    $captureExecFields = {
+        if ($state.ActionKind -ne 'Executable') { return }
+        if (@($state.ExecActions).Count -eq 0) { return }
+        $i = $state.ExecIndex
+        if ($i -lt 0 -or $i -ge @($state.ExecActions).Count) { return }
+        $entry = $state.ExecActions[$i]
+        $entry.Execute = $txtScript.Text.Trim()
+        $entry.Arguments = $txtExtraArgs.Text
+        $entry.WorkingDirectory = $txtWorkDir.Text.Trim()
+        $entry.Summary = (@($entry.Execute, $entry.Arguments) | Where-Object { $_ }) -join ' '
+    }
+
+    # The other direction: put a stored action into the fields.
+    $showExecAction = {
+        param($Index)
+        if (@($state.ExecActions).Count -eq 0) { return }
+        if ($Index -lt 0 -or $Index -ge @($state.ExecActions).Count) { return }
+        $entry = $state.ExecActions[$Index]
+        $state.ExecIndex = $Index
+        # Suspended so filling three fields does not queue three refreshes of a plan that is
+        # halfway between two actions.
+        $wasSuspended = $state.Suspend
+        $state.Suspend = $true
+        $txtScript.Text = [string]$entry.Execute
+        $txtExtraArgs.Text = [string]$entry.Arguments
+        $txtWorkDir.Text = [string]$entry.WorkingDirectory
+        $state.Suspend = $wasSuspended
+    }
+
     $buildExecPlan = {
         if (-not $state.BasePlan) { return $null }
 
@@ -472,14 +526,16 @@ function Show-PSTSMEditor {
         $p.Description = $txtDesc.Text
 
         if ($state.ActionKind -eq 'Executable') {
-            $p.RawAction = [ordered]@{
-                Execute          = $txtScript.Text.Trim()
-                Arguments        = $txtExtraArgs.Text
-                WorkingDirectory = $txtWorkDir.Text.Trim()
-                Summary          = (@($txtScript.Text.Trim(), $txtExtraArgs.Text) | Where-Object { $_ }) -join ' '
-            }
-            # Kept in step with RawAction: Test-PSTSMPlan's WORKDIR check reads this one.
-            $p.WorkingDirectory = $txtWorkDir.Text.Trim()
+            # Fold whatever is on screen back into the action it belongs to before reading the
+            # list, so the currently-shown action is not a keystroke behind the others.
+            & $captureExecFields
+
+            $p.RawActions = @($state.ExecActions)
+            # RawAction stays the first action: callers and tests read it, and for the common
+            # single-action case the two say the same thing.
+            $p.RawAction = @($state.ExecActions)[0]
+            # Kept in step: Test-PSTSMPlan's WORKDIR and PROGRAM checks read these.
+            $p.WorkingDirectory = [string]$p.RawAction.WorkingDirectory
         }
         # Unsupported: the action is not on screen and not in the write. Carried through untouched
         # so nothing downstream has to special-case a plan with a missing one.
@@ -1407,14 +1463,56 @@ function Show-PSTSMEditor {
         # form does, because nothing is regenerated from parsed pieces.
         $state.Suspend = $true
 
-        $secScript.Header.Text = 'Program'
-        $lblDerived.Text = 'This task runs a program directly rather than a PowerShell script. ' +
-        'The three fields below are written back exactly as you leave them.'
+        # Working copies, so Cancel leaves the loaded plan untouched.
+        $state.ExecActions = @(
+            foreach ($a in @($Plan.RawActions)) {
+                [ordered]@{
+                    Execute          = [string]$a.Execute
+                    Arguments        = [string]$a.Arguments
+                    WorkingDirectory = [string]$a.WorkingDirectory
+                    Summary          = [string]$a.Summary
+                }
+            }
+        )
+        if (@($state.ExecActions).Count -eq 0) {
+            $state.ExecActions = @([ordered]@{
+                    Execute          = [string]$Plan.RawAction.Execute
+                    Arguments        = [string]$Plan.RawAction.Arguments
+                    WorkingDirectory = [string]$Plan.RawAction.WorkingDirectory
+                    Summary          = [string]$Plan.RawAction.Summary
+                })
+        }
+
+        $count = @($state.ExecActions).Count
+        $secScript.Header.Text = if ($count -gt 1) { "Programs ($count)" } else { 'Program' }
+        $lblDerived.Text = if ($count -gt 1) {
+            "This task runs $count programs in order. Pick one above to edit it; all of them are " +
+            'written back exactly as you leave them.'
+        }
+        else {
+            'This task runs a program directly rather than a PowerShell script. ' +
+            'The three fields below are written back exactly as you leave them.'
+        }
         $lblDerived.Visible = $true
 
-        $txtScript.Text = [string]$Plan.RawAction.Execute
-        $txtExtraArgs.Text = [string]$Plan.RawAction.Arguments
-        $txtWorkDir.Text = [string]$Plan.RawAction.WorkingDirectory
+        if ($cboExecAction) {
+            [void]$cboExecAction.Items.Clear()
+            for ($i = 0; $i -lt $count; $i++) {
+                $leaf = try { [System.IO.Path]::GetFileName(([string]$state.ExecActions[$i].Execute).Trim('"', ' ')) } catch { '' }
+                if (-not $leaf) { $leaf = '(no program)' }
+                [void]$cboExecAction.Items.Add(("{0} of {1}:  {2}" -f ($i + 1), $count, $leaf))
+            }
+            $cboExecAction.SelectedIndex = 0
+            $cboExecAction.add_SelectedIndexChanged({
+                    if (-not $cboExecAction -or -not $showExecAction) { return }
+                    # Save what is on screen into the action being left, THEN load the new one.
+                    if ($captureExecFields) { & $captureExecFields }
+                    & $showExecAction $cboExecAction.SelectedIndex
+                    if ($refresh) { & $refresh }
+                })
+        }
+
+        & $showExecAction 0
 
         # Browse filters for .ps1, which is the wrong picker for a program.
         $btnBrowseScript.Visible = $false

@@ -787,12 +787,45 @@ Describe 'Live show-and-pump smoke test' -Skip:(-not $script:IsSta) {
         finally { $form.Dispose() }
     }
 
+    It 'offers a selector for a multi-program task and keeps every action' {
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                @($_.Actions).Count -gt 1 -and
+                @($_.Actions | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskExecAction' }).Count -eq 0
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no all-exec multi-action task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.ActionKind | Should -Be 'Executable'
+
+        $caught = Invoke-WithThreadExceptionTrap -Action { Show-PSTSMEditor -Plan $plan -SelfTest }
+        if ($caught.Count -gt 0) { throw "Thread exception during show: $($caught[0].Message)" }
+
+        $form = Show-PSTSMEditor -Plan $plan -BuildOnly
+        try {
+            $all = @(Get-AllControl -Root $form)
+            # One entry per action, so nothing is editable-but-invisible.
+            $picker = @($all | Where-Object {
+                    $_ -is [System.Windows.Forms.ComboBox] -and $_.AccessibleName -eq 'Which action to edit'
+                })[0]
+            $picker | Should -Not -BeNullOrEmpty -Because 'a task with several programs needs a way to reach each one'
+            $picker.Items.Count | Should -Be @($t.Actions).Count
+
+            $save = @($all | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -match '(?i)^save' })[0]
+            $save.Enabled | Should -BeTrue
+        }
+        finally { $form.Dispose() }
+    }
+
     It 'opens an Unsupported task with the action locked but the schedule savable' {
-        # A multi-action task: the action cannot be rebuilt from a plan, but the schedule around it
-        # can still be edited in place. Save must therefore be ENABLED while the name is not -
-        # renaming would mean creating a new task around an action nothing here can rebuild.
-        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { @($_.Actions).Count -gt 1 })[0]
-        if (-not $t) { Set-ItResult -Skipped -Because 'no multi-action task on this machine'; return }
+        # A COM-handler task: the action has no command line at all, so it cannot be rebuilt from a
+        # plan - but the schedule around it can still be edited in place. Save must therefore be
+        # ENABLED while the name is not, since renaming would mean creating a new task around an
+        # action nothing here can rebuild.
+        #
+        # A multi-action task is no longer the example to use: those are modelled now.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+                Where-Object { @($_.Actions)[0].CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction' })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no COM-handler task on this machine'; return }
 
         $plan = ConvertFrom-PSTSMDefinition -Task $t
         $plan.ActionKind | Should -Be 'Unsupported'

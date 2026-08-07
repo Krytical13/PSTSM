@@ -66,14 +66,24 @@ function Register-PSTSMPlan {
         # in the form is exactly what gets registered, which is the only honest way to re-save an
         # action this tool did not build.
         if ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind -eq 'Executable') {
-            $actionParams = @{
-                Execute = [string]$Plan.RawAction.Execute
-            }
-            # Passed only when non-empty: New-ScheduledTaskAction writes an empty <Arguments/>
-            # element for an empty string, which is a difference from a task that never had one.
-            if ($Plan.RawAction.Arguments) { $actionParams['Argument'] = [string]$Plan.RawAction.Arguments }
-            if ($Plan.RawAction.WorkingDirectory) { $actionParams['WorkingDirectory'] = [string]$Plan.RawAction.WorkingDirectory }
-            $action = New-ScheduledTaskAction @actionParams
+            # RawActions when the plan carries it, falling back to the single RawAction so a plan
+            # exported before multi-action support still registers exactly as it used to.
+            $sourceActions = @(
+                if ($Plan.PSObject.Properties['RawActions'] -and @($Plan.RawActions).Count -gt 0) { $Plan.RawActions }
+                else { $Plan.RawAction }
+            )
+
+            $action = @(
+                foreach ($ra in $sourceActions) {
+                    $actionParams = @{ Execute = [string]$ra.Execute }
+                    # Passed only when non-empty: New-ScheduledTaskAction writes an empty
+                    # <Arguments/> element for an empty string, which is a difference from a task
+                    # that never had one.
+                    if ($ra.Arguments) { $actionParams['Argument'] = [string]$ra.Arguments }
+                    if ($ra.WorkingDirectory) { $actionParams['WorkingDirectory'] = [string]$ra.WorkingDirectory }
+                    New-ScheduledTaskAction @actionParams
+                }
+            )
         }
         else {
             $targetScript = $Plan.ScriptPath

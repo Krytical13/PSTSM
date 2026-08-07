@@ -51,15 +51,43 @@ function ConvertFrom-PSTSMDefinition {
         $action = if ($realActions.Count -gt 0) { $realActions[0] } else { $null }
         $notes = New-Object System.Collections.Generic.List[string]
 
-        if ($realActions.Count -gt 1) {
-            $notes.Add("Task has $($realActions.Count) actions; only the first is modelled. Saving would drop the others.")
-        }
-
         # Not every action runs a program. Roughly half the built-in Windows tasks use a
         # ComHandler action, which has a ClassId instead of an Execute, so reading .Execute
         # yields nothing and the "what does this run" answer has to come from elsewhere.
         $actionClass = if ($action) { $action.CimClass.CimClassName } else { '<none>' }
         $isExec = ($actionClass -eq 'MSFT_TaskExecAction')
+
+        # Every action, not just the first. A task that runs two programs has nothing
+        # unrepresentable about it - the plan simply used to hold one, and the difference between
+        # "we cannot model this" and "we only kept one of them" was invisible from the outside.
+        # All-exec is what matters: one COM handler anywhere in the list and the whole task stays
+        # read-only, because that action genuinely cannot be rebuilt from a plan.
+        $allExec = ($realActions.Count -gt 0) -and
+            (@($realActions | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskExecAction' }).Count -eq 0)
+
+        $rawActions = @(
+            foreach ($a in $realActions) {
+                $aIsExec = ($a.CimClass.CimClassName -eq 'MSFT_TaskExecAction')
+                [ordered]@{
+                    Execute          = [string]$(if ($aIsExec) { $a.Execute })
+                    Arguments        = [string]$(if ($aIsExec) { $a.Arguments })
+                    WorkingDirectory = [string]$(if ($aIsExec) { $a.WorkingDirectory })
+                    ActionType       = [string]$a.CimClass.CimClassName
+                    Summary          = $(
+                        if ($aIsExec) { (@([string]$a.Execute, [string]$a.Arguments) | Where-Object { $_ }) -join ' ' }
+                        elseif ($a.PSObject.Properties['ClassId'] -and $a.ClassId) { "$($a.CimClass.CimClassName) - COM class $($a.ClassId)" }
+                        else { [string]$a.CimClass.CimClassName }
+                    )
+                }
+            }
+        )
+
+        if ($realActions.Count -gt 1 -and -not $allExec) {
+            $notes.Add("Task has $($realActions.Count) actions and at least one is not a program to run, so it cannot be rebuilt here. The schedule around it can still be changed.")
+        }
+        elseif ($realActions.Count -gt 1) {
+            $notes.Add("Task runs $($realActions.Count) programs in order. All of them are kept.")
+        }
 
         if (-not $action) {
             $notes.Add('Task has no actions at all, so there is nothing for it to run.')
@@ -224,16 +252,24 @@ function ConvertFrom-PSTSMDefinition {
             #                      back the exact strings shown - PSTSM re-quotes nothing, which
             #                      makes this a stricter guarantee than the PowerShell path, where
             #                      the argument string is reconstructed from parsed parameters.
-            #   Unsupported      - no command line exists to preserve (a COM handler), or there
-            #                      are more actions than this plan shape holds. Re-registering
-            #                      through the plan would drop something, so the action stays
-            #                      read-only and only the schedule around it can be edited.
+            #   Unsupported      - at least one action has no command line to preserve (a COM
+            #                      handler), or there are no actions at all. Re-registering
+            #                      through the plan would drop something, so the actions stay
+            #                      read-only and only the schedule around them can be edited.
+            #
+            # Action COUNT is deliberately not part of this. A task that runs two programs is not
+            # less modellable than one that runs a single program - the plan used to hold one, and
+            # that was a limit of the shape rather than of the task.
             ActionKind        = $(
                 if ($parsed.IsRecognized -and $isExec -and $realActions.Count -eq 1) { 'PowerShellScript' }
-                elseif ($isExec -and $realActions.Count -eq 1 -and $action.Execute) { 'Executable' }
+                elseif ($allExec -and $rawActions[0].Execute) { 'Executable' }
                 else { 'Unsupported' }
             )
             ActionType        = $actionClass
+
+            # Every action in order. RawAction below stays the first one, unchanged, because
+            # callers and tests read it - but RawActions is what Register-PSTSMPlan writes.
+            RawActions        = $rawActions
             RawAction         = [ordered]@{
                 Execute          = [string]$(if ($isExec) { $action.Execute })
                 Arguments        = [string]$(if ($isExec) { $action.Arguments })

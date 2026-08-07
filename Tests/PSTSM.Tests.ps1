@@ -947,11 +947,35 @@ Describe 'Editing existing tasks of every shape' {
         (ConvertFrom-PSTSMDefinition -Task $t).ActionKind | Should -Be 'Unsupported'
     }
 
-    It 'calls a task with more actions than the plan holds Unsupported' {
-        # Only the first action is modelled, so re-registering through the plan would drop the
-        # rest. That is a real loss and stays blocked, unlike the exec case above.
-        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { @($_.Actions).Count -gt 1 })[0]
-        if (-not $t) { Set-ItResult -Skipped -Because 'no multi-action task on this machine'; return }
+    It 'keeps every action of a multi-program task, and calls it Executable' {
+        # Action COUNT is not what makes a task unmodellable. A task that runs two programs is no
+        # less representable than one that runs a single program - the plan simply used to hold
+        # one, and "we only kept the first" was indistinguishable from "we cannot model this".
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                @($_.Actions).Count -gt 1 -and
+                @($_.Actions | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskExecAction' }).Count -eq 0
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no all-exec multi-action task on this machine'; return }
+
+        $plan = ConvertFrom-PSTSMDefinition -Task $t
+        $plan.ActionKind | Should -Be 'Executable'
+        @($plan.RawActions).Count | Should -Be @($t.Actions).Count -Because 'dropping one silently is the failure this replaces'
+        for ($i = 0; $i -lt @($t.Actions).Count; $i++) {
+            $plan.RawActions[$i].Execute | Should -BeExactly ([string]@($t.Actions)[$i].Execute)
+            $plan.RawActions[$i].Arguments | Should -BeExactly ([string]@($t.Actions)[$i].Arguments)
+        }
+        # RawAction still means "the first one", because callers and tests read it.
+        $plan.RawAction.Execute | Should -BeExactly ([string]@($t.Actions)[0].Execute)
+    }
+
+    It 'still refuses a task whose actions are not all programs' {
+        # One COM handler anywhere in the list and the whole task stays read-only: that action
+        # genuinely has no command line to rebuild it from, so re-registering would lose it.
+        $t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                @($_.Actions).Count -gt 1 -and
+                @($_.Actions | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskExecAction' }).Count -gt 0
+            })[0]
+        if (-not $t) { Set-ItResult -Skipped -Because 'no mixed-action task on this machine'; return }
 
         (ConvertFrom-PSTSMDefinition -Task $t).ActionKind | Should -Be 'Unsupported'
     }

@@ -455,8 +455,15 @@ editor will let you change:
 | `ActionKind` | What it is | Editable |
 |---|---|---|
 | `PowerShellScript` | One exec action that parses back to a `.ps1` | Everything — the script, its parameters, the schedule |
-| `Executable` | One exec action that does not: `robocopy.exe`, a `.cmd`, or a host invoked with inline `-Command` | Program, Arguments, Start in — plus the schedule |
-| `Unsupported` | No command line to preserve (a COM handler), or more actions than one plan holds | Nothing. Shown read-only |
+| `Executable` | One **or more** exec actions that do not: `robocopy.exe`, a `.cmd`, or a host invoked with inline `-Command` | Program, Arguments, Start in for each — plus the schedule |
+| `Unsupported` | Any action with no command line to preserve (a COM handler), or no actions at all | The schedule only. Actions shown read-only |
+
+Action *count* is deliberately not part of that decision. A task that runs three programs in order is
+no less representable than one that runs a single program — the plan simply used to hold one, and
+"we only kept the first" was indistinguishable from "we cannot model this". All actions are now
+carried in `RawActions`, and the editor offers a selector to edit each one. `RawAction` still means
+the first, because callers read it. One COM handler anywhere in the list and the whole task stays
+read-only, because that action genuinely cannot be rebuilt from a plan.
 
 The rule is unchanged: **PSTSM never silently reshapes an action into its preferred form.** What
 changed is the recognition that this rule was being applied far more widely than it needed to be.

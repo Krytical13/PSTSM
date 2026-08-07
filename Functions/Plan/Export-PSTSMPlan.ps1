@@ -77,6 +77,10 @@ function Export-PSTSMPlan {
             # ever on the elevated path, which is the hardest place to notice it.
             ActionKind       = $(if ($Plan.PSObject.Properties['ActionKind']) { $Plan.ActionKind } else { $null })
             RawAction        = $(if ($Plan.PSObject.Properties['RawAction']) { $Plan.RawAction } else { $null })
+            # Every action, not just the first. Dropping this is how a two-program task would come
+            # back from the elevated save as a one-program task - silently, and only on the path
+            # that is hardest to watch.
+            RawActions       = $(if ($Plan.PSObject.Properties['RawActions']) { @($Plan.RawActions) } else { $null })
 
             RenderedCommand  = "$($Plan.EnginePath) $($Plan.ArgumentString)"
         }
@@ -215,6 +219,17 @@ function Import-PSTSMPlan {
         if ($raw.PSObject.Properties['ActionKind'] -and $raw.ActionKind) {
             $plan | Add-Member -MemberType NoteProperty -Name 'ActionKind' -Value ([string]$raw.ActionKind)
             $plan | Add-Member -MemberType NoteProperty -Name 'RawAction' -Value (ConvertTo-PSTSMOrderedDictionary $raw.RawAction)
+
+            # A file written before multi-action support has RawAction but no RawActions. Rebuild
+            # the list from the single action rather than leaving it empty, so everything
+            # downstream can read one shape and Register-PSTSMPlan does not have to guess.
+            $actionList = @(
+                if ($raw.PSObject.Properties['RawActions'] -and $raw.RawActions) {
+                    foreach ($a in @($raw.RawActions)) { ConvertTo-PSTSMOrderedDictionary $a }
+                }
+                elseif ($raw.RawAction) { ConvertTo-PSTSMOrderedDictionary $raw.RawAction }
+            )
+            $plan | Add-Member -MemberType NoteProperty -Name 'RawActions' -Value $actionList
         }
 
         $plan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value {
