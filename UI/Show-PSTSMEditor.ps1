@@ -1296,7 +1296,10 @@ function Show-PSTSMEditor {
     $btnTest.add_Click({
             $plan = & $buildPlan
             if (-not $plan) { return }
-            Show-PSTSMTestRun -Plan $plan -Owner $form
+            # The action on screen, not always the first: for a multi-program task the operator is
+            # asking about the one they are looking at.
+            $idx = if ($state.ActionKind -eq 'Executable') { [int]$state.ExecIndex } else { 0 }
+            Show-PSTSMTestRun -Plan $plan -ActionIndex $idx -Owner $form
         })
 
     $bar = New-PSTSMUIActionBar -LeftButton @($btnTest, $btnExport) -RightButton @($btnCancel, $btnSave)
@@ -1529,12 +1532,15 @@ function Show-PSTSMEditor {
         $noParams = New-PSTSMUILabel -Text 'Arguments for a program are a single command line, edited above.' -ForeColor $t.Muted
         Add-PSTSMUIStacked -Stack $paramHost -Control $noParams
 
-        # Test-run builds and runs a PowerShell command line, which is not what this action is.
-        # Running an arbitrary program on the operator's behalf is a different promise than this
-        # button makes elsewhere, so it is not offered here.
-        $btnTest.Enabled = $false
+        # Test-run works here too, and is a stricter reproduction than it is for a script: what runs
+        # is character-for-character the command line on screen, with nothing re-quoted. For a task
+        # with several programs it runs the one currently selected, not all of them - running three
+        # because someone wanted to check the second is not a favour.
         $tipTest = New-Object System.Windows.Forms.ToolTip
-        $tipTest.SetToolTip($btnTest, 'Test-run applies to PowerShell scripts. Use Run in the main window to start this task.')
+        $tipTest.SetToolTip($btnTest, $(if ($count -gt 1) {
+                    'Runs the selected program once, as you, and shows what it printed. The other programs are not run.'
+                }
+                else { 'Runs this program once, as you, and shows what it printed.' }))
 
         $state.Suspend = $false
         & $refresh

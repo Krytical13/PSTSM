@@ -31,6 +31,10 @@ function Show-PSTSMTestRun {
 
         [System.Windows.Forms.Form]$Owner,
 
+        # Which action to run, for a task that runs several programs. Passed straight through.
+        [ValidateRange(0, 31)]
+        [int]$ActionIndex = 0,
+
         [switch]$SelfTest,
 
         [object]$Result
@@ -136,7 +140,7 @@ function Show-PSTSMTestRun {
     $form.add_Shown({
             $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
             [System.Windows.Forms.Application]::DoEvents()
-            try { $r = Invoke-PSTSMTestRun -Plan $Plan -Confirm:$false }
+            try { $r = Invoke-PSTSMTestRun -Plan $Plan -ActionIndex $ActionIndex -Confirm:$false }
             finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
             & $render $r
         })

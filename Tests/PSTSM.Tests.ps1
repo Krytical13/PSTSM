@@ -999,6 +999,70 @@ Describe 'Editing existing tasks of every shape' {
     }
 }
 
+Describe 'Test-run targets the right action' {
+    # -WhatIf throughout: the Command string is built before ShouldProcess, so this asserts what
+    # WOULD run without running anything. The suite stays side-effect free.
+    BeforeAll {
+        $script:ExecPlan = [PSCustomObject]@{
+            PSTypeName = 'PSTSM.TaskPlan'
+            TaskName   = 'ThreeStep'
+            TaskPath   = '\'
+            ScriptPath = $null
+            EnginePath = 'C:\should-not-be-used.exe'
+            ActionKind = 'Executable'
+            RawAction  = [ordered]@{ Execute = 'C:\Windows\System32\first.exe'; Arguments = '/one'; WorkingDirectory = '' }
+            RawActions = @(
+                [ordered]@{ Execute = 'C:\Windows\System32\first.exe'; Arguments = '/one'; WorkingDirectory = '' },
+                [ordered]@{ Execute = 'C:\Windows\System32\second.exe'; Arguments = '/two "a b"'; WorkingDirectory = '' },
+                [ordered]@{ Execute = 'C:\Windows\System32\third.exe'; Arguments = '/three'; WorkingDirectory = '' }
+            )
+        }
+        $script:ExecPlan | Add-Member -MemberType ScriptProperty -Name 'ArgumentString' -Value { 'SHOULD NOT BE USED' }
+    }
+
+    It 'runs the action it was asked for, not always the first' {
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 0 -WhatIf).Command | Should -BeExactly 'C:\Windows\System32\first.exe /one'
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 1 -WhatIf).Command | Should -BeExactly 'C:\Windows\System32\second.exe /two "a b"'
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 2 -WhatIf).Command | Should -BeExactly 'C:\Windows\System32\third.exe /three'
+    }
+
+    It 'uses the command line verbatim rather than the generated argument string' {
+        # An executable plan has no script and no generated arguments. Reading ArgumentString here
+        # would quietly run something else entirely.
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 0 -WhatIf).Command |
+            Should -Not -Match 'SHOULD NOT BE USED'
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 0 -WhatIf).Command |
+            Should -Not -Match 'should-not-be-used'
+    }
+
+    It 'clamps an index past the end instead of running nothing' {
+        (Invoke-PSTSMTestRun -Plan $script:ExecPlan -ActionIndex 9 -WhatIf).Command |
+            Should -BeExactly 'C:\Windows\System32\third.exe /three'
+    }
+
+    It 'falls back to the single RawAction for a plan written before RawActions existed' {
+        $legacy = $script:ExecPlan.PSObject.Copy()
+        $legacy.PSObject.Properties.Remove('RawActions')
+        (Invoke-PSTSMTestRun -Plan $legacy -ActionIndex 0 -WhatIf).Command |
+            Should -BeExactly 'C:\Windows\System32\first.exe /one'
+    }
+
+    It 'still builds a script plan from the engine and its generated arguments' {
+        $plan = New-PSTSMPlan -ScriptPath $script:QuietScript -TaskName 'ScriptCase'
+        $cmd = (Invoke-PSTSMTestRun -Plan $plan -WhatIf).Command
+        $cmd | Should -Match ([regex]::Escape($plan.EnginePath))
+        $cmd | Should -Match '-File'
+    }
+
+    It 'refuses an action with no program rather than starting nothing and calling it a run' {
+        $empty = $script:ExecPlan.PSObject.Copy()
+        $empty.RawActions = @([ordered]@{ Execute = ''; Arguments = '/x'; WorkingDirectory = '' })
+        $r = Invoke-PSTSMTestRun -Plan $empty -ActionIndex 0 -Confirm:$false
+        $r.Started | Should -BeFalse
+        $r.Error | Should -Match 'no program'
+    }
+}
+
 Describe 'The -PowerShellOnly fast path agrees with the full parse' {
     # Get-PSTSMInventory decides -PowerShellOnly from the file name before parsing anything, so it
     # does not tokenise 290 command lines only to discard most of them. That is only safe while the

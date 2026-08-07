@@ -34,8 +34,17 @@ function Invoke-PSTSMTestRun {
         unicode), and a real task's transcript preserves unicode exactly, because the wrapper
         writes to a file rather than to a pipe. Only this preview is lossy, and only for
         characters the console code page lacks.
+        For an 'Executable' plan there is no script and no generated argument string - the action
+        IS a command line. That case runs exactly the three fields the editor shows, with no
+        re-quoting, which makes it a stricter reproduction than the script path: what runs here is
+        character-for-character what Task Scheduler will run.
     .PARAMETER Plan
-        The plan to run. Only ScriptPath, EnginePath, ArgumentString and WorkingDirectory are used.
+        The plan to run. For a script plan: ScriptPath, EnginePath, ArgumentString and
+        WorkingDirectory. For an Executable plan: the chosen entry of RawActions.
+    .PARAMETER ActionIndex
+        Which action to run, for a task that runs several programs in order. Ignored for a script
+        plan. Only one is run per press, and the caller says which - running all three of a
+        three-program task because someone wanted to check the second is not a favour.
     .PARAMETER TimeoutSeconds
         Kill the process after this long. A script that hangs must not hang the window that
         started it.
@@ -52,12 +61,33 @@ function Invoke-PSTSMTestRun {
         [Parameter(Mandatory)]
         [object]$Plan,
 
+        [ValidateRange(0, 31)]
+        [int]$ActionIndex = 0,
+
         [ValidateRange(5, 3600)]
         [int]$TimeoutSeconds = 120
     )
 
+    # What to run, and from where. A script plan renders its command from the engine plus the
+    # generated arguments; an executable plan already IS a command line and is used verbatim.
+    $isExecPlan = ($Plan.PSObject.Properties['ActionKind'] -and $Plan.ActionKind -eq 'Executable')
+
+    $execTarget = $null
+    if ($isExecPlan) {
+        $actions = @(
+            if ($Plan.PSObject.Properties['RawActions'] -and @($Plan.RawActions).Count -gt 0) { $Plan.RawActions }
+            else { $Plan.RawAction }
+        )
+        $idx = [Math]::Min([Math]::Max($ActionIndex, 0), $actions.Count - 1)
+        $execTarget = $actions[$idx]
+    }
+
+    $runFile = if ($isExecPlan) { [string]$execTarget.Execute } else { [string]$Plan.EnginePath }
+    $runArgs = if ($isExecPlan) { [string]$execTarget.Arguments } else { [string]$Plan.ArgumentString }
+    $runDir = if ($isExecPlan) { [string]$execTarget.WorkingDirectory } else { [string]$Plan.WorkingDirectory }
+
     $result = [pscustomobject]@{
-        Command   = "$($Plan.EnginePath) $($Plan.ArgumentString)"
+        Command   = (@($runFile, $runArgs) | Where-Object { $_ }) -join ' '
         RanAs     = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         ExitCode  = $null
         ExitText  = $null
@@ -68,18 +98,28 @@ function Invoke-PSTSMTestRun {
         Error     = $null
     }
 
-    if (-not $PSCmdlet.ShouldProcess($Plan.ScriptPath, 'Run once now')) { return $result }
+    $shouldTarget = if ($isExecPlan) { $runFile } else { $Plan.ScriptPath }
+    if (-not $PSCmdlet.ShouldProcess($shouldTarget, 'Run once now')) { return $result }
+
+    if ([string]::IsNullOrWhiteSpace($runFile)) {
+        $result.Error = 'This action has no program to run.'
+        return $result
+    }
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Plan.EnginePath
-    $psi.Arguments = $Plan.ArgumentString
+    $psi.FileName = $runFile
+    $psi.Arguments = $runArgs
     # Redirection requires UseShellExecute = $false, which is also what keeps the console hidden.
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
-    if ($Plan.WorkingDirectory -and (Test-Path -LiteralPath $Plan.WorkingDirectory)) {
-        $psi.WorkingDirectory = $Plan.WorkingDirectory
+    # Test-PSTSMPathAvailable, not Test-Path: a working directory on a share that has gone would
+    # otherwise block this for the full SMB timeout before the process even starts. An unknown
+    # answer means "do not set it" - the process then starts in this one's directory, which is the
+    # same thing that happens when the directory is simply absent.
+    if ($runDir -and (Test-PSTSMPathAvailable -Path $runDir) -eq $true) {
+        $psi.WorkingDirectory = $runDir
     }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
